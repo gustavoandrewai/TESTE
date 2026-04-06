@@ -1,28 +1,47 @@
-# Simulador NTN-B (CSV)
+# Simulador Web de NTN-B e Tesouro Prefixado (Streamlit)
 
-Foi criada a planilha `Simulador_NTNB.csv` (separada por `;`) para simular a variação de preço de NTN-B com diferentes taxas reais de juros.
+Aplicativo interativo em Python para simular preço e sensibilidade de **NTN-B (Tesouro IPCA+)** e **Tesouro Prefixado**.
 
-## Campos editáveis
-- `B4`: Valor nominal (R$)
-- `B5`: Anos até o vencimento
-- `B6`: IPCA anual esperado (%)
-- `B7`: Taxa de cupom real anual (%)
-- `B8`: Frequência de cupom (pagamentos por ano)
-- `B9`: Taxa real base para comparação (%)
+## Como rodar
 
-## Tabela de simulação
-- As taxas reais de mercado ficam em `A11:A25`.
-- O preço teórico hoje é calculado em `B11:B25`.
-- O valor projetado no vencimento é calculado em `C11:C25`.
-- A variação percentual contra a taxa base é calculada em `D11:D25`.
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-## Fórmulas usadas
-- Preço teórico (coluna B):
-  `=($B$4*$B$7/100/$B$8)*(1-(1+taxa/$B$8)^(-$B$5*$B$8))/(taxa/$B$8)+$B$4*(1+taxa/$B$8)^(-$B$5*$B$8)`
-  onde `taxa = A(linha)/100`.
-- Valor projetado no vencimento (coluna C):
-  `=B(linha)*(1+$B$6/100)^$B$5`
-- Variação vs base (coluna D):
-  `=B(linha)/$B$28-1`
-- Preço na taxa base (`B28`):
-  mesma fórmula de preço teórico usando `B9` como taxa.
+## Inputs no topo do dashboard
+
+- Valor nominal
+- Anos até vencimento
+- IPCA esperado (% a.a.)
+- Taxa real atual (% a.a.)
+- Taxa real de cenário (% a.a.)
+
+## Métricas calculadas
+
+Para ambos os títulos:
+
+- Preço atual
+- Preço no cenário
+- Variação percentual
+- Duration aproximada
+
+## Visualizações
+
+- Gráfico de **Preço vs Taxa de Juros** (NTN-B e Prefixado)
+- Tabela de sensibilidade com múltiplos cenários
+- Gráfico de sensibilidade (% de variação)
+
+## Cenários múltiplos (extra)
+
+No campo de cenários, informe taxas reais separadas por vírgula (exemplo: `7, 6, 5, 4`).
+
+## Fórmulas utilizadas (modelo simplificado)
+
+- Conversão real -> nominal: `taxa_nominal = (1 + taxa_real) * (1 + ipca) - 1`
+- Preço NTN-B (zero cupom simplificado):
+  `preco = (valor_nominal * (1 + ipca)^anos) / (1 + taxa_real)^anos`
+- Preço Prefixado (zero cupom):
+  `preco = valor_nominal / (1 + taxa_nominal)^anos`
+- Duration aproximada (modificada):
+  `duration = anos / (1 + yield)`
