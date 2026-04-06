@@ -1,27 +1,20 @@
-"""Motor financeiro para simulação de NTN-B e Tesouro Prefixado.
-
-As funções deste módulo centralizam a modelagem de preço, duration, convexidade,
-DV01 e consolidação de carteira para uso no app Streamlit.
-"""
+"""Engine financeiro para análise de carteira NTN-B / Prefixado."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
-
 TITLE_NTNB = "NTN-B"
 TITLE_PREFIXADO = "Tesouro Prefixado"
-VALID_TYPES = {TITLE_NTNB, TITLE_PREFIXADO}
+VALID_TYPES = (TITLE_NTNB, TITLE_PREFIXADO)
 
 
 @dataclass
 class Position:
-    """Representa uma posição de renda fixa para análise de carteira."""
-
     name: str
     title_type: str
     invested_amount: float
@@ -37,8 +30,6 @@ class Position:
 
 @dataclass
 class ScenarioConfig:
-    """Configuração dos cenários de estresse e probabilidades."""
-
     optimistic_shift_bp: float = -100.0
     base_shift_bp: float = 0.0
     pessimistic_shift_bp: float = 100.0
@@ -48,184 +39,119 @@ class ScenarioConfig:
 
 
 def real_to_nominal_rate(real_rate: float, ipca: float) -> float:
-    """Converte taxa real para taxa nominal anual pela identidade de Fisher."""
-
-    return (1.0 + real_rate) * (1.0 + ipca) - 1.0
+    return (1 + real_rate) * (1 + ipca) - 1
 
 
-def _periodic_rate(position: Position, annual_rate: float) -> float:
-    """Retorna taxa por período consistente com tipo de título e frequência."""
-
-    annual_nominal = (
-        real_to_nominal_rate(annual_rate, position.expected_ipca)
-        if position.title_type == TITLE_NTNB
-        else annual_rate
-    )
-    return annual_nominal / position.frequency
+def _annual_nominal_rate(pos: Position, annual_rate: float) -> float:
+    return real_to_nominal_rate(annual_rate, pos.expected_ipca) if pos.title_type == TITLE_NTNB else annual_rate
 
 
-def _cashflows(position: Position) -> list[tuple[float, float]]:
-    """Gera fluxo de caixa nominal por período.
+def _cashflows(pos: Position) -> list[tuple[int, float, float]]:
+    """Retorna lista de (n_período, t_anos, fluxo_nominal)."""
+    periods = max(1, int(round(pos.years_to_maturity * pos.frequency)))
+    out: list[tuple[int, float, float]] = []
 
-    - NTN-B: principal corrigido por IPCA esperado ao longo do tempo + cupom real.
-    - Prefixado: principal fixo + cupom nominal (se houver; LTN costuma ser 0%).
-    """
+    for n in range(1, periods + 1):
+        t = n / pos.frequency
+        principal_t = pos.nominal_value * (1 + pos.expected_ipca) ** t if pos.title_type == TITLE_NTNB else pos.nominal_value
+        coupon = principal_t * (pos.coupon_rate / 100) / pos.frequency
+        out.append((n, t, coupon + (principal_t if n == periods else 0.0)))
 
-    periods = max(1, int(round(position.years_to_maturity * position.frequency)))
-    flows: list[tuple[float, float]] = []
-
-    for i in range(1, periods + 1):
-        t = i / position.frequency
-
-        if position.title_type == TITLE_NTNB:
-            principal_t = position.nominal_value * (1.0 + position.expected_ipca) ** t
-            coupon = principal_t * (position.coupon_rate / 100.0) / position.frequency
-        else:
-            principal_t = position.nominal_value
-            coupon = principal_t * (position.coupon_rate / 100.0) / position.frequency
-
-        redemption = principal_t if i == periods else 0.0
-        flows.append((t, coupon + redemption))
-
-    return flows
+    return out
 
 
-def price_from_yield(position: Position, annual_rate: float) -> float:
-    """Precifica o título pelo desconto dos fluxos de caixa."""
-
-    periodic_rate = _periodic_rate(position, annual_rate)
-    price = 0.0
-
-    for t, cf in _cashflows(position):
-        n = int(round(t * position.frequency))
-        price += cf / (1.0 + periodic_rate) ** n
-
-    return price
+def price_from_yield(pos: Position, annual_rate: float) -> float:
+    r_per = _annual_nominal_rate(pos, annual_rate) / pos.frequency
+    return sum(cf / (1 + r_per) ** n for n, _, cf in _cashflows(pos))
 
 
-def duration_convexity(position: Position, annual_rate: float) -> tuple[float, float]:
-    """Calcula duration modificada e convexidade aproximada."""
-
-    periodic_rate = _periodic_rate(position, annual_rate)
-    flows = _cashflows(position)
-    price = price_from_yield(position, annual_rate)
+def duration_convexity(pos: Position, annual_rate: float) -> tuple[float, float]:
+    """Duration modificada + convexidade discreta anualizada."""
+    r_per = _annual_nominal_rate(pos, annual_rate) / pos.frequency
+    price = price_from_yield(pos, annual_rate)
     if price <= 0:
         return 0.0, 0.0
 
-    macaulay = 0.0
-    convexity = 0.0
+    macaulay_num = 0.0
+    convex_num = 0.0
+    for n, t, cf in _cashflows(pos):
+        pv = cf / (1 + r_per) ** n
+        macaulay_num += t * pv
+        convex_num += (n * (n + 1) * pv) / (1 + r_per) ** 2
 
-    for t, cf in flows:
-        n = int(round(t * position.frequency))
-        pv = cf / (1.0 + periodic_rate) ** n
-        macaulay += t * pv
-
-        # Convexidade discreta para taxa por período, convertida para base anual.
-        convexity += (n * (n + 1) * pv) / ((1.0 + periodic_rate) ** 2)
-
-    macaulay /= price
-    modified = macaulay / (1.0 + periodic_rate)
-    convexity = convexity / (price * (position.frequency**2))
-
+    macaulay = macaulay_num / price
+    modified = macaulay / (1 + r_per)
+    convexity = convex_num / (price * pos.frequency**2)
     return modified, convexity
 
 
-def dv01(position: Position, annual_rate: float) -> float:
-    """DV01 por unidade de valor nominal: variação de preço para +1bp na taxa."""
-
-    p0 = price_from_yield(position, annual_rate)
-    p1 = price_from_yield(position, annual_rate + 0.0001)
-    return p1 - p0
+def dv01(pos: Position, annual_rate: float) -> float:
+    return price_from_yield(pos, annual_rate + 0.0001) - price_from_yield(pos, annual_rate)
 
 
-def normalize_probabilities(config: ScenarioConfig) -> ScenarioConfig:
-    """Normaliza probabilidades para somarem 1.0."""
-
-    total = config.prob_optimistic + config.prob_base + config.prob_pessimistic
-    if total <= 0:
-        config.prob_optimistic, config.prob_base, config.prob_pessimistic = 1 / 3, 1 / 3, 1 / 3
-        return config
-
-    config.prob_optimistic /= total
-    config.prob_base /= total
-    config.prob_pessimistic /= total
-    return config
+def _apply_shift(rate: float, shift_bp: float) -> float:
+    return max(0.0001, rate + shift_bp / 10_000)
 
 
-def _scenario_rate(base_rate: float, shift_bp: float) -> float:
-    """Aplica choque (em bps) sobre uma taxa anual."""
+def normalize_probabilities(cfg: ScenarioConfig) -> ScenarioConfig:
+    probs = np.array([cfg.prob_optimistic, cfg.prob_base, cfg.prob_pessimistic], dtype=float)
+    s = probs.sum()
+    probs = np.array([1 / 3, 1 / 3, 1 / 3]) if s <= 0 else probs / s
+    cfg.prob_optimistic, cfg.prob_base, cfg.prob_pessimistic = probs.tolist()
+    return cfg
 
-    return max(0.0001, base_rate + shift_bp / 10000.0)
 
+def analyze_position(pos: Position, cfg: ScenarioConfig) -> dict:
+    price_buy = price_from_yield(pos, pos.buy_rate)
+    price_current = price_from_yield(pos, pos.current_rate)
+    price_custom = price_from_yield(pos, pos.scenario_rate)
 
-def analyze_position(position: Position, config: ScenarioConfig) -> dict:
-    """Consolida métricas de uma posição para cenários e risco."""
+    qty = pos.invested_amount / price_buy if price_buy > 0 else 0.0
+    current_value = qty * price_current
+    scenario_value = qty * price_custom
 
-    price_buy = price_from_yield(position, position.buy_rate)
-    price_current = price_from_yield(position, position.current_rate)
-    price_custom = price_from_yield(position, position.scenario_rate)
+    shocks = {
+        "otimista": cfg.optimistic_shift_bp,
+        "base": cfg.base_shift_bp,
+        "pessimista": cfg.pessimistic_shift_bp,
+    }
+    scen_values = {k: qty * price_from_yield(pos, _apply_shift(pos.current_rate, bp)) for k, bp in shocks.items()}
+    scen_pnl = {k: v - current_value for k, v in scen_values.items()}
 
-    quantity = position.invested_amount / price_buy if price_buy > 0 else 0.0
-    current_value = quantity * price_current
-    custom_value = quantity * price_custom
-    pnl_custom = custom_value - current_value
-
-    opt_rate = _scenario_rate(position.current_rate, config.optimistic_shift_bp)
-    base_rate = _scenario_rate(position.current_rate, config.base_shift_bp)
-    pess_rate = _scenario_rate(position.current_rate, config.pessimistic_shift_bp)
-
-    value_optimistic = quantity * price_from_yield(position, opt_rate)
-    value_base = quantity * price_from_yield(position, base_rate)
-    value_pessimistic = quantity * price_from_yield(position, pess_rate)
-
-    pnl_opt = value_optimistic - current_value
-    pnl_base = value_base - current_value
-    pnl_pess = value_pessimistic - current_value
-
-    modified_duration, convexity = duration_convexity(position, position.current_rate)
-    dv01_position = dv01(position, position.current_rate) * quantity
-
-    expected_pnl = (
-        pnl_opt * config.prob_optimistic + pnl_base * config.prob_base + pnl_pess * config.prob_pessimistic
+    mod_dur, conv = duration_convexity(pos, pos.current_rate)
+    exp_pnl = (
+        scen_pnl["otimista"] * cfg.prob_optimistic
+        + scen_pnl["base"] * cfg.prob_base
+        + scen_pnl["pessimista"] * cfg.prob_pessimistic
     )
 
     return {
-        "nome": position.name,
-        "tipo": position.title_type,
-        "valor_investido": position.invested_amount,
-        "quantidade": quantity,
+        "nome": pos.name,
+        "tipo": pos.title_type,
+        "valor_investido": pos.invested_amount,
+        "quantidade": qty,
         "preco_compra": price_buy,
         "preco_atual": price_current,
         "preco_cenario": price_custom,
         "valor_atual": current_value,
-        "valor_cenario": custom_value,
-        "ganho_perda_cenario": pnl_custom,
-        "variacao_cenario_pct": (price_custom / price_current - 1.0) * 100 if price_current > 0 else 0.0,
-        "taxa_compra_pct": position.buy_rate * 100,
-        "taxa_atual_pct": position.current_rate * 100,
-        "taxa_cenario_pct": position.scenario_rate * 100,
-        "duration_modificada": modified_duration,
-        "convexidade": convexity,
-        "dv01_r$": dv01_position,
-        "pnl_otimista": pnl_opt,
-        "pnl_base": pnl_base,
-        "pnl_pessimista": pnl_pess,
-        "retorno_esperado_pnl": expected_pnl,
-        "value_optimistic": value_optimistic,
-        "value_base": value_base,
-        "value_pessimistic": value_pessimistic,
+        "valor_cenario": scenario_value,
+        "ganho_perda_cenario": scenario_value - current_value,
+        "variacao_cenario_pct": (price_custom / price_current - 1) * 100 if price_current > 0 else 0.0,
+        "duration_modificada": mod_dur,
+        "convexidade": conv,
+        "dv01_r$": dv01(pos, pos.current_rate) * qty,
+        "pnl_otimista": scen_pnl["otimista"],
+        "pnl_base": scen_pnl["base"],
+        "pnl_pessimista": scen_pnl["pessimista"],
+        "retorno_esperado_pnl": exp_pnl,
     }
 
 
-def analyze_portfolio(positions: Iterable[Position], config: ScenarioConfig) -> tuple[pd.DataFrame, dict]:
-    """Gera visão consolidada da carteira e agregados de risco."""
-
-    config = normalize_probabilities(config)
-    rows = [analyze_position(p, config) for p in positions]
-
-    if not rows:
-        empty = pd.DataFrame()
-        return empty, {
+def analyze_portfolio(positions: Iterable[Position], cfg: ScenarioConfig) -> tuple[pd.DataFrame, dict]:
+    cfg = normalize_probabilities(cfg)
+    df = pd.DataFrame([analyze_position(p, cfg) for p in positions])
+    if df.empty:
+        return df, {
             "valor_atual_total": 0.0,
             "valor_cenario_total": 0.0,
             "ganho_perda_total": 0.0,
@@ -238,102 +164,67 @@ def analyze_portfolio(positions: Iterable[Position], config: ScenarioConfig) -> 
             "pnl_pessimista_total": 0.0,
         }
 
-    df = pd.DataFrame(rows)
-    total_value = float(df["valor_atual"].sum())
-
-    if total_value > 0:
-        weights = df["valor_atual"] / total_value
-        duration_media = float((weights * df["duration_modificada"]).sum())
-        convexidade_media = float((weights * df["convexidade"]).sum())
-    else:
-        duration_media = 0.0
-        convexidade_media = 0.0
+    total = float(df["valor_atual"].sum())
+    w = (df["valor_atual"] / total) if total > 0 else 0
 
     summary = {
-        "valor_atual_total": total_value,
+        "valor_atual_total": total,
         "valor_cenario_total": float(df["valor_cenario"].sum()),
         "ganho_perda_total": float(df["ganho_perda_cenario"].sum()),
         "dv01_total": float(df["dv01_r$"].sum()),
-        "duration_media": duration_media,
-        "convexidade_media": convexidade_media,
+        "duration_media": float((w * df["duration_modificada"]).sum()) if total > 0 else 0.0,
+        "convexidade_media": float((w * df["convexidade"]).sum()) if total > 0 else 0.0,
         "retorno_esperado_total": float(df["retorno_esperado_pnl"].sum()),
         "pnl_otimista_total": float(df["pnl_otimista"].sum()),
         "pnl_base_total": float(df["pnl_base"].sum()),
         "pnl_pessimista_total": float(df["pnl_pessimista"].sum()),
     }
-
     return df, summary
 
 
-def pnl_curve_for_position(position: Position, min_rate: float, max_rate: float, points: int = 50) -> pd.DataFrame:
-    """Curva de P&L da posição em função da taxa de juros."""
-
+def pnl_curve_for_position(pos: Position, min_rate: float, max_rate: float, points: int = 50) -> pd.DataFrame:
     rates = np.linspace(min_rate, max_rate, points)
-    price_buy = price_from_yield(position, position.buy_rate)
-    quantity = position.invested_amount / price_buy if price_buy > 0 else 0.0
-    price_current = price_from_yield(position, position.current_rate)
-    current_value = quantity * price_current
-
-    rows = []
-    for r in rates:
-        value_r = quantity * price_from_yield(position, float(r))
-        rows.append({"taxa (%)": r * 100, "pnl_r$": value_r - current_value})
-
-    return pd.DataFrame(rows)
+    buy = price_from_yield(pos, pos.buy_rate)
+    qty = pos.invested_amount / buy if buy > 0 else 0.0
+    current_value = qty * price_from_yield(pos, pos.current_rate)
+    pnl = [qty * price_from_yield(pos, float(r)) - current_value for r in rates]
+    return pd.DataFrame({"taxa (%)": rates * 100, "pnl_r$": pnl})
 
 
 def sensitivity_by_shift(df_positions: pd.DataFrame, shifts_bp: Iterable[int]) -> pd.DataFrame:
-    """Sensibilidade consolidada de carteira para choques paralelos de taxa."""
-
+    positions = dataframe_to_positions(df_positions)
     rows = []
-    for shock in shifts_bp:
-        config = ScenarioConfig(
-            optimistic_shift_bp=float(shock),
-            base_shift_bp=float(shock),
-            pessimistic_shift_bp=float(shock),
-            prob_optimistic=0.0,
-            prob_base=1.0,
-            prob_pessimistic=0.0,
-        )
-        positions = dataframe_to_positions(df_positions)
-        _, summary = analyze_portfolio(positions, config)
-        rows.append({"choque_bp": shock, "pnl_r$": summary["pnl_base_total"]})
-
+    for s in shifts_bp:
+        cfg = ScenarioConfig(s, s, s, 0.0, 1.0, 0.0)
+        _, summary = analyze_portfolio(positions, cfg)
+        rows.append({"choque_bp": s, "pnl_r$": summary["pnl_base_total"]})
     return pd.DataFrame(rows)
 
 
 def positions_to_dataframe(positions: Iterable[Position]) -> pd.DataFrame:
-    """Converte lista de posições para DataFrame (persistência/UI)."""
-
     return pd.DataFrame([asdict(p) for p in positions])
 
 
 def dataframe_to_positions(df: pd.DataFrame) -> list[Position]:
-    """Converte DataFrame da UI para lista de objetos Position."""
-
     if df.empty:
         return []
 
-    positions: list[Position] = []
-    for _, row in df.iterrows():
-        title_type = str(row.get("title_type", TITLE_NTNB))
-        if title_type not in VALID_TYPES:
-            title_type = TITLE_NTNB
-
-        positions.append(
+    out: list[Position] = []
+    for _, r in df.iterrows():
+        t = str(r.get("title_type", TITLE_NTNB))
+        out.append(
             Position(
-                name=str(row.get("name", "Posição")),
-                title_type=title_type,
-                invested_amount=float(row.get("invested_amount", 0.0)),
-                nominal_value=float(row.get("nominal_value", 1000.0)),
-                buy_rate=float(row.get("buy_rate", 0.06)),
-                current_rate=float(row.get("current_rate", 0.06)),
-                scenario_rate=float(row.get("scenario_rate", 0.05)),
-                years_to_maturity=float(row.get("years_to_maturity", 5.0)),
-                expected_ipca=float(row.get("expected_ipca", 0.045)),
-                coupon_rate=float(row.get("coupon_rate", 6.0 if title_type == TITLE_NTNB else 0.0)),
-                frequency=int(row.get("frequency", 2)),
+                name=str(r.get("name", "Posição")),
+                title_type=t if t in VALID_TYPES else TITLE_NTNB,
+                invested_amount=float(r.get("invested_amount", 0)),
+                nominal_value=float(r.get("nominal_value", 1000)),
+                buy_rate=float(r.get("buy_rate", 0.06)),
+                current_rate=float(r.get("current_rate", 0.06)),
+                scenario_rate=float(r.get("scenario_rate", 0.05)),
+                years_to_maturity=float(r.get("years_to_maturity", 5.0)),
+                expected_ipca=float(r.get("expected_ipca", 0.045)),
+                coupon_rate=float(r.get("coupon_rate", 6.0 if t == TITLE_NTNB else 0.0)),
+                frequency=max(1, int(r.get("frequency", 2))),
             )
         )
-
-    return positions
+    return out
