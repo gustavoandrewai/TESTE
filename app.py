@@ -61,6 +61,20 @@ def metric_row(items: list[tuple[str, str]]) -> None:
         col.metric(label, value)
 
 
+
+
+def didatic_manual_panel() -> None:
+    """Painel didático para orientar ajustes manuais."""
+    with st.expander("Guia rápido de ajustes manuais (didático)", expanded=False):
+        st.markdown(
+            """
+            **1) Taxa atual**: usada na marcação a mercado de hoje.  
+            **2) Taxa cenário**: taxa que você quer testar para ver ganho/perda.  
+            **3) Prazo (anos)**: sensibilidade cresce com prazo.  
+            **4) Duration alvo**: se ativada, o app estima um prazo equivalente para essa duration.
+            """
+        )
+
 def scenario_controls() -> None:
     cfg = st.session_state.scenario_config
 
@@ -107,6 +121,8 @@ def portfolio_editor() -> pd.DataFrame:
             "expected_ipca": st.column_config.NumberColumn("IPCA", format="%.4f"),
             "coupon_rate": st.column_config.NumberColumn("Cupom (%)", min_value=0.0, step=0.5),
             "frequency": st.column_config.NumberColumn("Freq", min_value=1, max_value=12, step=1),
+            "use_duration_target": st.column_config.CheckboxColumn("Usar duration alvo"),
+            "duration_target": st.column_config.NumberColumn("Duration alvo", min_value=0.0, step=0.1),
         },
     )
 
@@ -142,6 +158,7 @@ def main() -> None:
     init_state()
     st.title("📊 Renda Fixa Pro | Carteira NTN-B e Prefixado")
     st.caption("Análise de carteira, cenários, risco, P&L e benchmark CDI.")
+    didatic_manual_panel()
 
     tabs = st.tabs(["Simulação individual", "Carteira", "Cenários", "Risco", "Benchmark"])
 
@@ -157,7 +174,7 @@ def main() -> None:
             ("Duration média", f"{summary['duration_media']:.2f}"),
         ])
         if not detail_df.empty:
-            st.dataframe(detail_df[["nome", "tipo", "preco_atual", "preco_cenario", "ganho_perda_cenario", "duration_modificada", "dv01_r$"]], use_container_width=True, hide_index=True)
+            st.dataframe(detail_df[["nome", "tipo", "preco_atual", "preco_cenario", "ganho_perda_cenario", "duration_modificada", "prazo_utilizado", "dv01_r$"]], use_container_width=True, hide_index=True)
 
     with tabs[0]:
         st.subheader("Simulação individual")
@@ -165,6 +182,13 @@ def main() -> None:
             st.info("Adicione posições na aba Carteira.")
         else:
             name = st.selectbox("Posição", st.session_state.positions_df["name"].tolist())
+            idx = st.session_state.positions_df.index[st.session_state.positions_df["name"] == name][0]
+            with st.expander("Ajuste manual rápido desta posição", expanded=False):
+                st.session_state.positions_df.loc[idx, "current_rate"] = st.slider("Taxa atual", 0.0, 0.30, float(st.session_state.positions_df.loc[idx, "current_rate"]), 0.001)
+                st.session_state.positions_df.loc[idx, "scenario_rate"] = st.slider("Taxa cenário", 0.0, 0.30, float(st.session_state.positions_df.loc[idx, "scenario_rate"]), 0.001)
+                st.session_state.positions_df.loc[idx, "years_to_maturity"] = st.slider("Prazo (anos)", 0.5, 40.0, float(st.session_state.positions_df.loc[idx, "years_to_maturity"]), 0.5)
+                st.session_state.positions_df.loc[idx, "use_duration_target"] = st.checkbox("Usar duration alvo", value=bool(st.session_state.positions_df.loc[idx, "use_duration_target"]))
+                st.session_state.positions_df.loc[idx, "duration_target"] = st.number_input("Duration alvo (anos)", min_value=0.0, value=float(st.session_state.positions_df.loc[idx, "duration_target"]), step=0.1)
             pos = dataframe_to_positions(st.session_state.positions_df[st.session_state.positions_df["name"] == name])[0]
             row = analyze_portfolio([pos], get_config())[0].iloc[0]
             metric_row([
@@ -172,6 +196,7 @@ def main() -> None:
                 ("Preço cenário", brl(row["preco_cenario"])),
                 ("P&L (R$)", brl(row["ganho_perda_cenario"])),
                 ("DV01", brl(row["dv01_r$"])),
+                ("Prazo usado", f"{row['prazo_utilizado']:.2f} anos"),
             ])
             st.caption("DV01 = variação aproximada em R$ para choque de +1 bp na taxa.")
             curve = pnl_curve_for_position(pos, max(0.0001, pos.current_rate - 0.04), pos.current_rate + 0.04, 60)

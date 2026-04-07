@@ -22,6 +22,8 @@ streamlit run app.py
 - Benchmark CDI e excesso de retorno
 - Salvamento local da simulação em JSON + recarga
 - Botões de cenário rápido e reset
+- Ajuste manual didático por posição (sliders + guia rápido)
+- Opção de usar **duration alvo** para estimar prazo equivalente
 
 ## Abas do sistema
 

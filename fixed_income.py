@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Iterable
 
 import numpy as np
@@ -26,6 +26,8 @@ class Position:
     expected_ipca: float
     coupon_rate: float = 0.0
     frequency: int = 2
+    use_duration_target: bool = False
+    duration_target: float = 0.0
 
 
 @dataclass
@@ -101,7 +103,25 @@ def normalize_probabilities(cfg: ScenarioConfig) -> ScenarioConfig:
     return cfg
 
 
+
+def _resolve_position(pos: Position) -> Position:
+    """Permite usar duration alvo para estimar prazo efetivo da posição."""
+    if not pos.use_duration_target or pos.duration_target <= 0:
+        return pos
+
+    best_years = pos.years_to_maturity
+    best_err = float("inf")
+    for years in np.arange(0.5, 41.0, 0.1):
+        trial = replace(pos, years_to_maturity=float(years), use_duration_target=False)
+        d, _ = duration_convexity(trial, trial.current_rate)
+        err = abs(d - pos.duration_target)
+        if err < best_err:
+            best_err, best_years = err, float(years)
+
+    return replace(pos, years_to_maturity=best_years, use_duration_target=False)
+
 def analyze_position(pos: Position, cfg: ScenarioConfig) -> dict:
+    pos = _resolve_position(pos)
     price_buy = price_from_yield(pos, pos.buy_rate)
     price_current = price_from_yield(pos, pos.current_rate)
     price_custom = price_from_yield(pos, pos.scenario_rate)
@@ -137,6 +157,8 @@ def analyze_position(pos: Position, cfg: ScenarioConfig) -> dict:
         "valor_cenario": scenario_value,
         "ganho_perda_cenario": scenario_value - current_value,
         "variacao_cenario_pct": (price_custom / price_current - 1) * 100 if price_current > 0 else 0.0,
+        "prazo_utilizado": pos.years_to_maturity,
+        "duration_alvo": pos.duration_target if pos.use_duration_target else 0.0,
         "duration_modificada": mod_dur,
         "convexidade": conv,
         "dv01_r$": dv01(pos, pos.current_rate) * qty,
@@ -225,6 +247,8 @@ def dataframe_to_positions(df: pd.DataFrame) -> list[Position]:
                 expected_ipca=float(r.get("expected_ipca", 0.045)),
                 coupon_rate=float(r.get("coupon_rate", 6.0 if t == TITLE_NTNB else 0.0)),
                 frequency=max(1, int(r.get("frequency", 2))),
+                use_duration_target=bool(r.get("use_duration_target", False)),
+                duration_target=float(r.get("duration_target", 0.0)),
             )
         )
     return out
