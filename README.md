@@ -121,6 +121,11 @@ Resposta exemplo (`/rankings/daily`):
 
 ## Dashboard com atualização manual do Yahoo
 O `streamlit_app.py` possui a aba **FIIs Yahoo**, com botão **“🔄 Atualizar dados do Yahoo Finance”** para forçar refresh dos preços conforme o tempo passa.
+Além do refresh, a aba traz uma visão mais profissional com:
+- KPIs de destaque (top retorno, preço médio, volatilidade média e liquidez média);
+- gráfico comparativo de retorno 1m vs 3m;
+- tabela formatada para leitura executiva;
+- exportação do snapshot para CSV.
 
 ## Decisões de arquitetura (resumo)
 1. Separação em camadas (`ingestion`, `services`, `repositories`, `api`) para facilitar evolução.

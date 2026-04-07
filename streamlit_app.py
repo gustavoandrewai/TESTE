@@ -62,6 +62,25 @@ def metric_row(items: list[tuple[str, str]]) -> None:
         col.metric(label, value)
 
 
+def apply_professional_theme() -> None:
+    """Aplica ajustes visuais para um dashboard com aparência mais profissional."""
+    st.markdown(
+        """
+        <style>
+            .block-container {padding-top: 1rem; padding-bottom: 1.5rem;}
+            .kpi-card {
+                border: 1px solid #E6E9EF;
+                border-radius: 12px;
+                padding: 0.9rem 1rem;
+                background: #FFFFFF;
+                box-shadow: 0 2px 6px rgba(16,24,40,0.05);
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 @st.cache_data(ttl=300)
 def fetch_yahoo_fii_snapshot(tickers: list[str]) -> pd.DataFrame:
     """Busca snapshot de FIIs no Yahoo Finance.
@@ -89,6 +108,61 @@ def fetch_yahoo_fii_snapshot(tickers: list[str]) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(data)
+
+
+def didactic_model_panel() -> None:
+    with st.expander("📘 Como interpretar o painel de FIIs (didático)", expanded=False):
+        st.markdown(
+            """
+            **Preço atual**: último fechamento disponível no Yahoo Finance.  
+            **Retorno 1m / 3m**: desempenho acumulado nos períodos.  
+            **Volatilidade 3m**: risco histórico anualizado.  
+            **Liquidez média 21d**: média de volume negociado recente.
+
+            **Leitura prática:** busque equilíbrio entre retorno, liquidez e risco.
+            """
+        )
+
+
+def render_yahoo_professional_dashboard(df_yahoo: pd.DataFrame) -> None:
+    if df_yahoo.empty:
+        st.warning("Nenhum dado retornado para os tickers informados.")
+        return
+
+    df = df_yahoo.copy()
+    df["retorno_1m_pct"] = df["retorno_1m"] * 100
+    df["retorno_3m_pct"] = df["retorno_3m"] * 100
+    df["volatilidade_3m_pct"] = df["volatilidade_3m"] * 100
+    df = df.sort_values("retorno_3m", ascending=False)
+
+    top = df.iloc[0]
+    cols = st.columns(4)
+    cols[0].metric("Top retorno 3m", top["ticker"], f"{top['retorno_3m_pct']:.2f}%")
+    cols[1].metric("Preço médio", f"R$ {df['preco_atual'].mean():.2f}")
+    cols[2].metric("Volatilidade média 3m", f"{df['volatilidade_3m_pct'].mean():.2f}%")
+    cols[3].metric("Liquidez média 21d", f"{df['liquidez_media_21d'].mean():,.0f}")
+
+    st.bar_chart(df.set_index("ticker")[["retorno_1m_pct", "retorno_3m_pct"]], height=280)
+
+    display_df = df[
+        ["ticker", "preco_atual", "retorno_1m_pct", "retorno_3m_pct", "volatilidade_3m_pct", "liquidez_media_21d"]
+    ].rename(
+        columns={
+            "preco_atual": "Preço Atual (R$)",
+            "retorno_1m_pct": "Retorno 1m (%)",
+            "retorno_3m_pct": "Retorno 3m (%)",
+            "volatilidade_3m_pct": "Volatilidade 3m (%)",
+            "liquidez_media_21d": "Liquidez Média 21d",
+        }
+    )
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        "⬇️ Exportar snapshot Yahoo (CSV)",
+        data=display_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"fii_yahoo_snapshot_{datetime.now(UTC).strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 
 
@@ -185,10 +259,12 @@ def save_restore_controls() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Renda Fixa Pro", page_icon="📊", layout="wide")
+    apply_professional_theme()
     init_state()
     st.title("📊 Renda Fixa Pro | Carteira NTN-B e Prefixado")
     st.caption("Análise de carteira, cenários, risco, P&L e benchmark CDI.")
     didatic_manual_panel()
+    didactic_model_panel()
 
     tabs = st.tabs(["Simulação individual", "Carteira", "Cenários", "Risco", "Benchmark", "FIIs Yahoo"])
 
@@ -285,12 +361,9 @@ def main() -> None:
 
         try:
             df_yahoo = fetch_yahoo_fii_snapshot(tickers)
-            if df_yahoo.empty:
-                st.warning("Nenhum dado retornado para os tickers informados.")
-            else:
-                if last_update_key in st.session_state:
-                    st.caption(f"Última atualização manual: {st.session_state[last_update_key]}")
-                st.dataframe(df_yahoo, use_container_width=True, hide_index=True)
+            if last_update_key in st.session_state:
+                st.caption(f"Última atualização manual: {st.session_state[last_update_key]}")
+            render_yahoo_professional_dashboard(df_yahoo)
         except Exception as exc:
             st.error(f"Falha ao buscar dados no Yahoo Finance: {exc}")
 
