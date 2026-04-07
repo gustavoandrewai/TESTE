@@ -9,6 +9,7 @@ Projeto didático em Python para analisar FIIs diariamente, com **P/VP como benc
 - **Pandas** para cálculos quantitativos.
 - **APScheduler** para rotina automática opcional.
 - **Providers desacoplados** (`app/ingestion/providers.py`) com `MockFIIProvider` pronto para troca por fonte real.
+- **Yahoo Finance opcional** com `YahooFIIProvider` para ingestão de preços quando `DATA_PROVIDER=yahoo`.
 
 ## Estrutura
 ```text
@@ -67,6 +68,11 @@ alembic upgrade head
 curl -X POST http://localhost:8000/jobs/run-daily
 ```
 
+## Usando dados do Yahoo Finance no pipeline
+1. Defina `DATA_PROVIDER=yahoo` no `.env`.
+2. Execute o job diário (`POST /jobs/run-daily`).
+3. O pipeline buscará cotações via `yfinance` e recalculará o ranking.
+
 ## Endpoints principais
 - `GET /health`
 - `GET /fiis`
@@ -111,6 +117,10 @@ Resposta exemplo (`/rankings/daily`):
 - **Pesos**: `WEIGHTS` em `app/scoring/model.py`.
 - **Taxonomia setorial**: `sector_taxonomy` + provider (`app/ingestion/providers.py`).
 - **Classificação** (`assimetria_positiva`, `neutro`, `value_trap`): `classify_opportunity`.
+- **Fonte de dados**: `DATA_PROVIDER` (`mock` ou `yahoo`) em `.env`.
+
+## Dashboard com atualização manual do Yahoo
+O `streamlit_app.py` possui a aba **FIIs Yahoo**, com botão **“🔄 Atualizar dados do Yahoo Finance”** para forçar refresh dos preços conforme o tempo passa.
 
 ## Decisões de arquitetura (resumo)
 1. Separação em camadas (`ingestion`, `services`, `repositories`, `api`) para facilitar evolução.

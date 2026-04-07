@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     environment: str = "dev"
     database_url: str = "postgresql+psycopg2://postgres:postgres@db:5432/fii_db"
     scheduler_enabled: bool = False
+    data_provider: str = "mock"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

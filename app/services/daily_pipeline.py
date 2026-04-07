@@ -4,7 +4,8 @@ import pandas as pd
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.ingestion.providers import BaseFIIProvider, MockFIIProvider
+from app.core.config import settings
+from app.ingestion.providers import BaseFIIProvider, MockFIIProvider, YahooFIIProvider
 from app.models.entities import BenchmarksDaily, FIIMaster, FundamentalsMonthly, JobRun, MarketDaily, ScoringDaily
 from app.scoring.model import (
     classify_opportunity,
@@ -20,7 +21,12 @@ from app.scoring.model import (
 class DailyPipelineService:
     def __init__(self, db: Session, provider: BaseFIIProvider | None = None):
         self.db = db
-        self.provider = provider or MockFIIProvider()
+        self.provider = provider or self._build_default_provider()
+
+    def _build_default_provider(self) -> BaseFIIProvider:
+        if settings.data_provider.lower() == "yahoo":
+            return YahooFIIProvider()
+        return MockFIIProvider()
 
     def run(self, ref_date: date | None = None) -> JobRun:
         ref_date = ref_date or date.today()

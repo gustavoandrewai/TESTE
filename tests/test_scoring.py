@@ -1,5 +1,6 @@
 import pandas as pd
 
+from app.ingestion.providers import YahooFIIProvider
 from app.scoring.model import classify_opportunity, compute_pvp_score
 
 
@@ -17,3 +18,9 @@ def test_classify_value_trap():
 
 def test_classify_positive_asymmetry():
     assert classify_opportunity(75, 78, 70, 0.2) == "assimetria_positiva"
+
+
+def test_yahoo_provider_safe_return():
+    provider = YahooFIIProvider()
+    series = pd.Series([10.0, 11.0, 12.0, 13.0])
+    assert round(provider._safe_return(series, 3), 4) == 0.3

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pandas as pd
 import streamlit as st
@@ -59,6 +60,35 @@ def metric_row(items: list[tuple[str, str]]) -> None:
     cols = st.columns(len(items))
     for col, (label, value) in zip(cols, items):
         col.metric(label, value)
+
+
+@st.cache_data(ttl=300)
+def fetch_yahoo_fii_snapshot(tickers: list[str]) -> pd.DataFrame:
+    """Busca snapshot de FIIs no Yahoo Finance.
+
+    Cache curto para evitar múltiplas chamadas em sequência e botão de refresh
+    para invalidar manualmente quando o usuário quiser atualizar.
+    """
+    import yfinance as yf
+
+    data = []
+    for ticker in tickers:
+        yf_ticker = f"{ticker}.SA" if not ticker.endswith(".SA") else ticker
+        history = yf.Ticker(yf_ticker).history(period="3mo", interval="1d")
+        if history.empty:
+            continue
+        close = history["Close"]
+        data.append(
+            {
+                "ticker": yf_ticker.replace(".SA", ""),
+                "preco_atual": float(close.iloc[-1]),
+                "retorno_1m": float(close.iloc[-1] / close.iloc[max(0, len(close) - 22)] - 1) if len(close) > 22 else 0.0,
+                "retorno_3m": float(close.iloc[-1] / close.iloc[0] - 1),
+                "volatilidade_3m": float(close.pct_change().dropna().std() * (252**0.5)),
+                "liquidez_media_21d": float(history["Volume"].tail(21).mean()),
+            }
+        )
+    return pd.DataFrame(data)
 
 
 
@@ -160,7 +190,7 @@ def main() -> None:
     st.caption("Análise de carteira, cenários, risco, P&L e benchmark CDI.")
     didatic_manual_panel()
 
-    tabs = st.tabs(["Simulação individual", "Carteira", "Cenários", "Risco", "Benchmark"])
+    tabs = st.tabs(["Simulação individual", "Carteira", "Cenários", "Risco", "Benchmark", "FIIs Yahoo"])
 
     with tabs[1]:
         st.subheader("Carteira")
@@ -241,6 +271,28 @@ def main() -> None:
             ("Excesso", pct((ret_pct - cdi) * 100)),
         ])
         st.dataframe(pd.DataFrame({"Métrica": ["Retorno esperado", "CDI", "Excesso"], "Valor (%)": [ret_pct * 100, cdi * 100, (ret_pct - cdi) * 100]}), use_container_width=True, hide_index=True)
+
+    with tabs[5]:
+        st.subheader("Atualização de FIIs via Yahoo Finance")
+        default_tickers = "HGLG11,VISC11,MXRF11,XPLG11"
+        tickers_text = st.text_input("Tickers (separados por vírgula)", value=default_tickers)
+        tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
+        last_update_key = "yahoo_last_update_utc"
+
+        if st.button("🔄 Atualizar dados do Yahoo Finance", type="primary", use_container_width=True):
+            fetch_yahoo_fii_snapshot.clear()
+            st.session_state[last_update_key] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        try:
+            df_yahoo = fetch_yahoo_fii_snapshot(tickers)
+            if df_yahoo.empty:
+                st.warning("Nenhum dado retornado para os tickers informados.")
+            else:
+                if last_update_key in st.session_state:
+                    st.caption(f"Última atualização manual: {st.session_state[last_update_key]}")
+                st.dataframe(df_yahoo, use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.error(f"Falha ao buscar dados no Yahoo Finance: {exc}")
 
     st.divider()
     save_restore_controls()

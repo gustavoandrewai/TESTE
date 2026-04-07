@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import date
 
+import pandas as pd
+
 
 @dataclass
 class IngestionBundle:
@@ -40,3 +42,104 @@ class MockFIIProvider(BaseFIIProvider):
         ]
         benchmarks = [{"reference_date": ref_date, "ifix_return_1m": 0.012, "ifix_return_12m": 0.11, "cdi_annual": 0.105}]
         return IngestionBundle(fiis=fiis, market=market, fundamentals=fundamentals, benchmarks=benchmarks)
+
+
+class YahooFIIProvider(BaseFIIProvider):
+    """Provider real usando Yahoo Finance via yfinance.
+
+    A camada foi mantida compatível com o formato do pipeline para que
+    seja fácil alternar entre mock e dados reais.
+    """
+
+    def __init__(self, tickers: list[str] | None = None):
+        self.tickers = tickers or ["HGLG11.SA", "VISC11.SA", "MXRF11.SA"]
+
+    def fetch_daily_bundle(self, ref_date: date) -> IngestionBundle:
+        try:
+            import yfinance as yf
+        except Exception as exc:  # pragma: no cover - depende de ambiente externo
+            raise RuntimeError("yfinance não está instalado no ambiente.") from exc
+
+        quotes = yf.download(
+            tickers=self.tickers,
+            period="6mo",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=True,
+        )
+        if quotes.empty:
+            raise RuntimeError("Yahoo Finance retornou dataset vazio.")
+
+        fiis = []
+        market = []
+        fundamentals = []
+        for yf_ticker in self.tickers:
+            ticker = yf_ticker.replace(".SA", "")
+            frame = self._extract_frame(quotes, yf_ticker)
+            last = frame.iloc[-1]
+            ret_1m = self._safe_return(frame["Adj Close"], 21)
+            ret_6m = self._safe_return(frame["Adj Close"], min(126, len(frame) - 1))
+            ret_12m = self._safe_return(frame["Adj Close"], min(252, len(frame) - 1))
+
+            fiis.append(
+                {
+                    "ticker": ticker,
+                    "name": ticker,
+                    "sector": "outros",
+                    "subsector": "geral",
+                    "manager": "nao_informado",
+                    "administrator": "nao_informado",
+                    "is_ifix": False,
+                }
+            )
+            vp_per_share = max(float(last["Close"]), 0.01)  # placeholder até integrar fonte fundamentalista oficial
+            market.append(
+                {
+                    "ticker": ticker,
+                    "reference_date": ref_date,
+                    "price": float(last["Close"]),
+                    "vp_per_share": vp_per_share,
+                    "pvp": float(last["Close"]) / vp_per_share,
+                    "avg_daily_liquidity": float(frame["Volume"].tail(21).mean()),
+                    "return_1m": ret_1m,
+                    "return_6m": ret_6m,
+                    "return_12m": ret_12m,
+                    "volatility": float(frame["Adj Close"].pct_change().dropna().std() * (252**0.5)),
+                    "drawdown": float((frame["Adj Close"] / frame["Adj Close"].cummax() - 1).min()),
+                }
+            )
+            fundamentals.append(
+                {
+                    "ticker": ticker,
+                    "reference_date": ref_date,
+                    "equity": 1_000_000_000.0,
+                    "dy_monthly": 0.008,
+                    "dy_12m": 0.10,
+                    "physical_vacancy": 0.08,
+                    "financial_vacancy": 0.09,
+                    "asset_concentration": 0.25,
+                    "tenant_concentration": 0.22,
+                    "avg_contract_term": 3.5,
+                    "leverage": 0.12,
+                    "delinquency": 0.02,
+                    "income_per_share": 1.0,
+                    "income_stability": 0.75,
+                }
+            )
+
+        benchmarks = [{"reference_date": ref_date, "ifix_return_1m": 0.0, "ifix_return_12m": 0.0, "cdi_annual": 0.105}]
+        return IngestionBundle(fiis=fiis, market=market, fundamentals=fundamentals, benchmarks=benchmarks)
+
+    def _extract_frame(self, quotes: pd.DataFrame, yf_ticker: str) -> pd.DataFrame:
+        if isinstance(quotes.columns, pd.MultiIndex):
+            frame = quotes[yf_ticker].dropna(how="all")
+        else:
+            frame = quotes.dropna(how="all")
+        return frame
+
+    def _safe_return(self, prices: pd.Series, lookback: int) -> float:
+        if lookback <= 0 or len(prices) <= lookback:
+            return 0.0
+        return float(prices.iloc[-1] / prices.iloc[-1 - lookback] - 1)
