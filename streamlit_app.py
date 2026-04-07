@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
@@ -159,7 +159,7 @@ def render_yahoo_professional_dashboard(df_yahoo: pd.DataFrame) -> None:
     st.download_button(
         "⬇️ Exportar snapshot Yahoo (CSV)",
         data=display_df.to_csv(index=False).encode("utf-8"),
-        file_name=f"fii_yahoo_snapshot_{datetime.now(UTC).strftime('%Y%m%d_%H%M')}.csv",
+        file_name=f"fii_yahoo_snapshot_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv",
         use_container_width=True,
     )
@@ -357,7 +357,7 @@ def main() -> None:
 
         if st.button("🔄 Atualizar dados do Yahoo Finance", type="primary", use_container_width=True):
             fetch_yahoo_fii_snapshot.clear()
-            st.session_state[last_update_key] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            st.session_state[last_update_key] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         try:
             df_yahoo = fetch_yahoo_fii_snapshot(tickers)
