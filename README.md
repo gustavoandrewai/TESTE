@@ -1,152 +1,119 @@
-# Dashboard de Aportes Mensais
+# FII Asymmetry Analyzer
 
-Aplicação web em **React + Vite + TypeScript** para importar uma planilha de aportes (`.xlsx`) e gerar:
+Projeto didático em Python para analisar FIIs diariamente, com **P/VP como benchmark dominante** para geração de ranking de oportunidades.
 
-- KPIs financeiros
-- gráficos de evolução
-- insights automáticos
-- alertas de inconsistência/importação
+## Arquitetura
+- **FastAPI** para endpoints.
+- **PostgreSQL + SQLAlchemy** para persistência.
+- **Alembic** para migrations.
+- **Pandas** para cálculos quantitativos.
+- **APScheduler** para rotina automática opcional.
+- **Providers desacoplados** (`app/ingestion/providers.py`) com `MockFIIProvider` pronto para troca por fonte real.
 
-Interface em **português-BR**, responsiva e pronta para rodar localmente.
-
----
-
-## Funcionalidades implementadas
-
-### Importação e processamento da planilha
-
-- Leitura de planilha `.xlsx` com biblioteca `xlsx`.
-- Tentativa de carregamento automático de `public/planilha de aportes.xlsx`.
-- Upload manual de outra planilha via interface.
-- Fallback automático para dados de exemplo quando o arquivo padrão não existir.
-
-### Mapeamento de colunas (automático + manual)
-
-A aplicação tenta inferir colunas por similaridade de nomes e permite ajuste manual.
-
-Campos suportados:
-
-- data
-- mês/ano
-- valor do aporte
-- categoria
-- ativo/investimento
-- saldo/patrimônio
-- rendimento
-
-### KPIs no dashboard
-
-- total aportado no mês atual
-- total aportado no ano atual
-- média mensal de aportes
-- maior aporte
-- menor aporte
-- crescimento mês a mês
-- evolução acumulada
-- patrimônio total (quando existir)
-
-### Gráficos
-
-- aportes por mês
-- evolução acumulada
-- divisão por categoria
-- comparação entre meses
-- tendência de crescimento
-
-### Insights automáticos
-
-- mês com maior aporte
-- mês com menor aporte
-- variação percentual do último mês vs mês anterior
-- alerta de queda acentuada
-- concentração por categoria
-- consistência/inconsistência de aportes
-
-### Tratamento de erros
-
-- linhas inválidas (sem data/mês válido ou sem valor de aporte) são ignoradas
-- alertas exibidos no painel de importação
-
----
-
-## Inferências adotadas para colunas ambíguas
-
-Quando os nomes de colunas são ambíguos, o sistema aplica inferência textual (normalizada, sem acentos), por exemplo:
-
-- **Data**: `data`, `dt`
-- **Mês/Ano**: `mês`, `mes`, `competencia`, `periodo`, `ano`
-- **Valor do aporte**: `aporte`, `valor`, `aplicacao`
-- **Categoria**: `categoria`
-- **Ativo/Investimento**: `ativo`, `invest`, `produto`
-- **Patrimônio**: `patrimonio`, `saldo`, `carteira`
-- **Rendimento**: `rendimento`, `rentabilidade`, `lucro`
-
-Se a inferência errar, ajuste no bloco **Mapeamento de colunas** na UI.
-
----
-
-## Estrutura do projeto
-
-```bash
-.
-├── public/
-├── src/
-│   ├── components/
-│   ├── services/
-│   ├── utils/
-│   ├── App.tsx
-│   ├── main.tsx
-│   └── styles.css
-├── package.json
-└── README.md
+## Estrutura
+```text
+app/
+  api/
+  core/
+  ingestion/
+  jobs/
+  models/
+  repositories/
+  schemas/
+  scoring/
+  services/
+alembic/
+tests/
 ```
 
----
+## Modelo de score (0-100)
+Pesos em `app/scoring/model.py`:
+- 45% valuation por P/VP
+- 20% fundamentos
+- 15% estabilidade/renda
+- 10% risco e liquidez
+- 10% relativo vs benchmark
 
-## Como rodar localmente
+### Bloco P/VP
+Implementa:
+- mediana e percentis setoriais;
+- desvio percentual vs mediana;
+- z-score histórico;
+- winsorização (5%-95%);
+- normalização 0-100;
+- penalização por deterioração fundamentalista.
 
-### 1) Instalar dependências
-
+## Como rodar local
 ```bash
-npm install
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload
 ```
 
-### 2) Rodar em desenvolvimento
-
+## Com Docker
 ```bash
-npm run dev
+docker compose up --build
 ```
 
-### 3) Build de produção
-
+## Migrations
 ```bash
-npm run build
-npm run preview
+alembic upgrade head
 ```
 
----
-
-## Como trocar a planilha depois
-
-### Opção A (recomendada para uso recorrente)
-
-1. Coloque o arquivo no caminho:
-
+## Rodar job diário manualmente
 ```bash
-public/planilha de aportes.xlsx
+curl -X POST http://localhost:8000/jobs/run-daily
 ```
 
-2. Reinicie o `npm run dev` (se necessário).
+## Endpoints principais
+- `GET /health`
+- `GET /fiis`
+- `GET /fiis/{ticker}`
+- `GET /rankings/daily`
+- `GET /rankings/by-sector`
+- `GET /rankings/value-traps`
+- `GET /benchmarks`
+- `POST /jobs/run-daily`
+- `GET /jobs/status`
 
-### Opção B (rápida pela interface)
+### Exemplos
+```bash
+curl 'http://localhost:8000/fiis?page=1&page_size=10&sector=logistica&only_ifix=true'
+curl 'http://localhost:8000/rankings/daily?page=1&page_size=20'
+curl 'http://localhost:8000/rankings/value-traps'
+```
 
-- Use o campo **Trocar planilha (.xlsx)** no topo da tela.
-- O arquivo será processado no navegador para a sessão atual.
+Resposta exemplo (`/rankings/daily`):
+```json
+{
+  "total": 3,
+  "page": 1,
+  "page_size": 20,
+  "items": [
+    {
+      "ticker": "HGLG11",
+      "reference_date": "2026-04-07",
+      "pvp_score": 74.2,
+      "fundamental_score": 83.5,
+      "income_quality_score": 72.0,
+      "risk_liquidity_score": 68.9,
+      "relative_score": 54.0,
+      "total_score": 73.3,
+      "classification": "assimetria_positiva"
+    }
+  ]
+}
+```
 
----
+## Configuração
+- **Pesos**: `WEIGHTS` em `app/scoring/model.py`.
+- **Taxonomia setorial**: `sector_taxonomy` + provider (`app/ingestion/providers.py`).
+- **Classificação** (`assimetria_positiva`, `neutro`, `value_trap`): `classify_opportunity`.
 
-## Observações
-
-- Se o arquivo `planilha de aportes.xlsx` não estiver no `public/`, o app inicia com dados de exemplo para não travar o fluxo.
-- Valores monetários são formatados para `pt-BR`.
-- Datas aceitas: Excel date serial, `yyyy-MM-dd`, `dd/MM/yyyy` e `MM/yyyy`.
+## Decisões de arquitetura (resumo)
+1. Separação em camadas (`ingestion`, `services`, `repositories`, `api`) para facilitar evolução.
+2. P/VP domina o score com bloco matemático explícito e auditável.
+3. Provider abstrato para permitir integração gradual com fontes oficiais sem quebrar API.
+4. Pipeline diário transacional com registro em `job_runs`.
