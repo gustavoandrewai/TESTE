@@ -154,3 +154,10 @@ python -m streamlit run fii_dashboard.py
 ```
 
 Nesse modo, `POST /jobs/run-daily` gera `ranking.csv` na raiz e `GET /rankings/daily` retorna JSON paginado baseado nesse arquivo.
+
+
+### Comportamento do job dinâmico por ticker
+- O dashboard envia os tickers digitados para `POST /jobs/run-daily?tickers=...`.
+- A API executa `daily_pipeline.py` via subprocess e sobrescreve `ranking.csv` em cada execução.
+- O endpoint `GET /rankings/daily` sempre lê o arquivo mais recente.
+- O status do último job fica em `job_status.json` (`status`, `tickers`, `last_run_utc`, `processed_count`).

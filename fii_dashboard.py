@@ -43,7 +43,7 @@ def fetch_yahoo_snapshot(tickers: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=5)
 def fetch_api_ranking(page_size: int = 200) -> pd.DataFrame:
     """Lê /rankings/daily aceitando respostas em formato paginado ou lista."""
     try:
@@ -61,13 +61,13 @@ def fetch_api_ranking(page_size: int = 200) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=120)
-def fetch_by_sector() -> dict:
+@st.cache_data(ttl=5)
+def fetch_job_status() -> dict:
     try:
-        resp = requests.get(f"{API_BASE}/rankings/by-sector", timeout=10)
-        if resp.status_code != 200:
+        response = requests.get(f"{API_BASE}/jobs/status", timeout=10)
+        if response.status_code != 200:
             return {}
-        return resp.json()
+        return response.json()
     except Exception:
         return {}
 
@@ -115,47 +115,6 @@ def render_score_breakdown(df: pd.DataFrame) -> None:
     chart = top.set_index("ticker")[contrib_cols]
     st.bar_chart(chart, height=360)
 
-    detail_cols = [
-        "ticker",
-        "total_score",
-        "classification",
-        "pvp_score",
-        "fundamental_score",
-        "income_quality_score",
-        "risk_liquidity_score",
-        "relative_score",
-    ]
-    st.dataframe(top[detail_cols], use_container_width=True, hide_index=True)
-
-
-def render_sector_panel(by_sector: dict) -> None:
-    st.subheader("🏭 Ranking por setor")
-    if not by_sector:
-        st.info("Endpoint por setor vazio ou indisponível.")
-        return
-
-    rows = []
-    for sector, items in by_sector.items():
-        if not items:
-            continue
-        scores = [i["score"] for i in items]
-        rows.append(
-            {
-                "setor": sector,
-                "qtd_fiis": len(items),
-                "score_medio": sum(scores) / len(scores),
-                "melhor_ticker": items[0]["ticker"],
-                "melhor_score": items[0]["score"],
-            }
-        )
-    if not rows:
-        st.info("Sem dados setoriais para mostrar.")
-        return
-
-    df_sector = pd.DataFrame(rows).sort_values("score_medio", ascending=False)
-    st.dataframe(df_sector, use_container_width=True, hide_index=True)
-    st.bar_chart(df_sector.set_index("setor")["score_medio"], height=280)
-
 
 def main() -> None:
     st.set_page_config(page_title="FII Assimetria Dashboard", page_icon="🏢", layout="wide")
@@ -183,12 +142,21 @@ def main() -> None:
     with c3:
         refresh = st.button("🔄 Atualizar Yahoo", type="primary", use_container_width=True)
 
+    tickers_clean = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
+    tickers_query = ",".join(tickers_clean)
+
     if run_job:
         try:
-            response = requests.post(f"{API_BASE}/jobs/run-daily", timeout=30)
+            response = requests.post(
+                f"{API_BASE}/jobs/run-daily",
+                params={"tickers": tickers_query},
+                timeout=60,
+            )
             fetch_api_ranking.clear()
-            fetch_by_sector.clear()
-            st.success(f"Job acionado: {response.json()}")
+            fetch_job_status.clear()
+            st.session_state["last_submitted_tickers"] = tickers_clean
+            st.session_state["last_job_response"] = response.json()
+            st.success("Job executado. Ranking atualizado com os tickers enviados.")
         except Exception as exc:
             st.error(f"Não foi possível acionar a API: {exc}")
 
@@ -199,8 +167,16 @@ def main() -> None:
     if "last_refresh" in st.session_state:
         st.caption(f"Última atualização manual do Yahoo: {st.session_state['last_refresh']}")
 
-    tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
-    df_yahoo = fetch_yahoo_snapshot(tickers)
+    st.subheader("🧾 Último job executado")
+    col_a, col_b = st.columns(2)
+    col_a.write("**Tickers enviados no último job:**")
+    col_a.code(", ".join(st.session_state.get("last_submitted_tickers", tickers_clean)) or "(vazio)")
+
+    job_status = fetch_job_status()
+    col_b.write("**Status retornado pela API:**")
+    col_b.json(job_status if job_status else st.session_state.get("last_job_response", {"status": "idle"}))
+
+    df_yahoo = fetch_yahoo_snapshot(tickers_clean)
 
     st.subheader("💹 Monitor de mercado (Yahoo Finance)")
     if not df_yahoo.empty:
@@ -223,19 +199,44 @@ def main() -> None:
 
     st.subheader("🏆 Ranking diário (API)")
 
-    # Compatível com payload mínimo (ticker/price/ret_1m/ret_6m/vol/score)
-    base_cols = ["ticker", "price", "ret_1m", "ret_6m", "vol", "score"]
-    available_base = [c for c in base_cols if c in ranking_df.columns]
+    # Exibe benchmarks detalhados + score final com scroll horizontal.
+    main_cols = [
+        "ticker",
+        "price",
+        "ret_1m",
+        "ret_3m",
+        "ret_6m",
+        "last_day_return",
+        "ma_21",
+        "ma_63",
+        "dist_ma_21",
+        "dist_ma_63",
+        "high_52w",
+        "low_52w",
+        "dist_high_52w",
+        "dist_low_52w",
+        "drawdown",
+        "vol",
+        "score",
+    ]
+    available = [c for c in main_cols if c in ranking_df.columns]
+    default_cols = [c for c in ["ticker", "price", "ret_1m", "ret_3m", "ret_6m", "drawdown", "vol", "score"] if c in available]
+
+    selected_cols = st.multiselect(
+        "Escolha colunas para visualizar",
+        options=available,
+        default=default_cols,
+    )
+
     if "score" in ranking_df.columns:
         ranking_df = ranking_df.sort_values("score", ascending=False)
 
-    st.dataframe(ranking_df[available_base] if available_base else ranking_df, use_container_width=True, hide_index=True)
+    cols_to_show = selected_cols if selected_cols else available
+    st.dataframe(ranking_df[cols_to_show], use_container_width=True, hide_index=True)
 
-    # Se a API avançada estiver disponível, exibe decomposição e painel setorial.
     if set(WEIGHTS.keys()).issubset(set(ranking_df.columns)) and "total_score" in ranking_df.columns:
         enriched = enrich_contributions(ranking_df)
         render_score_breakdown(enriched)
-        render_sector_panel(fetch_by_sector())
 
 
 if __name__ == "__main__":
