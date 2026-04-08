@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -10,6 +11,19 @@ import streamlit as st
 
 
 API_BASE = "http://localhost:8000"
+OVERRIDES_FILE = Path("sector_overrides.csv")
+SECTORS = [
+    "logistica",
+    "shopping",
+    "lajes_corporativas",
+    "renda_urbana",
+    "recebiveis_high_grade",
+    "recebiveis_high_yield",
+    "fof",
+    "hibridos",
+    "desenvolvimento",
+    "outros",
+]
 SECTOR_LABELS = {
     "logistica": "🚚 Logística",
     "shopping": "🏢 Shopping",
@@ -57,37 +71,45 @@ def normalize_sector_col(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "setor" not in out.columns:
         out["setor"] = "outros"
-    out["setor"] = out["setor"].fillna("outros").astype(str).str.strip().str.lower()
-    out["setor"] = out["setor"].replace({"": "outros", "fundo_de_fundos": "fof", "FoF": "fof"})
+    if "subsetor" not in out.columns:
+        out["subsetor"] = "na"
+    out["setor"] = out["setor"].fillna("outros").astype(str).str.strip().str.lower().replace({"": "outros", "fundo_de_fundos": "fof", "FoF": "fof"})
+    out["subsetor"] = out["subsetor"].fillna("na")
     return out
+
+
+def load_overrides() -> pd.DataFrame:
+    if not OVERRIDES_FILE.exists():
+        return pd.DataFrame(columns=["ticker", "setor", "subsetor", "updated_at"])
+    return pd.read_csv(OVERRIDES_FILE)
+
+
+def save_override(ticker: str, setor: str, subsetor: str) -> None:
+    df = load_overrides()
+    updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_row = pd.DataFrame([{"ticker": ticker, "setor": setor, "subsetor": subsetor or "na", "updated_at": updated_at}])
+    df = df[df["ticker"] != ticker]
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(OVERRIDES_FILE, index=False)
 
 
 def generate_tese(row: pd.Series) -> str:
     frases = []
-
     if row.get("pvp", 1.0) < row.get("pvp_setor_mediana", 1.0):
         frases.append("negocia com desconto frente à mediana do setor")
-
-    fundamentals_bad = (row.get("vacancia", 0) > 0.12) or (row.get("inadimplencia", 0) > 0.05) or (row.get("alavancagem", 0) > 0.25)
-    if row.get("pvp_desconto_setor", 0) > 0.15 and fundamentals_bad:
+    if row.get("pvp_desconto_setor", 0) > 0.15 and ((row.get("vacancia", 0) > 0.12) or (row.get("inadimplencia", 0) > 0.05)):
         frases.append("desconto relevante com risco de value trap")
-
     if row.get("dy_12m", 0) > row.get("dy_setor_mediana", 0) and row.get("vacancia", 1) < 0.08:
         frases.append("boa geração de renda com vacância controlada")
-
     if row.get("alavancagem", 0) > 0.22:
         frases.append("alavancagem elevada exige monitoramento")
-
     if row.get("score_total", 0) >= 70:
         frases.append("assimetria positiva para acompanhamento prioritário")
     elif row.get("score_total", 0) >= 55:
         frases.append("assimetria moderada com potencial seletivo")
     else:
         frases.append("caso neutro, depende de gatilho de melhora")
-
     return "; ".join(frases).capitalize() + "."
-
-
 
 
 def ensure_top5_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -102,10 +124,9 @@ def ensure_top5_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     if "score_total" not in out.columns and "score" in out.columns:
         out["score_total"] = out["score"]
         warnings.append("score_total ausente; usando coluna 'score' como fallback.")
-
-    out["setor"] = out["setor"].fillna("outros").astype(str).str.strip().str.lower().replace({"": "outros"})
-    out["subsetor"] = out["subsetor"].fillna("na")
+    out = normalize_sector_col(out)
     return out, warnings
+
 
 def run_daily_job_with_tickers(tickers_text: str) -> dict:
     tickers = parse_tickers_text(tickers_text)
@@ -122,27 +143,19 @@ def run_daily_job_with_tickers(tickers_text: str) -> dict:
 
 
 def render_job_trace(status: dict) -> None:
-    st.write("**Rastreabilidade da execução**")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Recebidos", status.get("tickers_received_count", 0))
     c2.metric("Válidos", status.get("tickers_valid_count", 0))
     c3.metric("Processados", status.get("processed_count", 0))
     c4.metric("Falharam", status.get("failed_count", 0))
 
-    if status.get("tickers_failed"):
-        failure_df = pd.DataFrame([{"ticker": k, "motivo": v} for k, v in status["tickers_failed"].items()])
-        st.warning("Tickers com falha e motivo:")
-        st.dataframe(failure_df, use_container_width=True, hide_index=True)
-
 
 def top5_by_sector(df: pd.DataFrame) -> pd.DataFrame:
-    # Correção obrigatória: Top 5 aplicado dentro de cada setor, nunca global.
-    grouped = (
+    return (
         df.groupby("setor", group_keys=False)
         .apply(lambda x: x.sort_values("score_total", ascending=False).head(5))
         .reset_index(drop=True)
     )
-    return grouped
 
 
 def render_ticker_card(row: pd.Series) -> None:
@@ -152,12 +165,6 @@ def render_ticker_card(row: pd.Series) -> None:
         c1.caption(row.get("classificacao", "neutro"))
         c2.metric("P/VP", f"{row.get('pvp', 0):.2f}")
         c3.metric("Score", f"{row.get('score_total', 0):.1f}")
-
-        d1, d2, d3 = st.columns(3)
-        d1.metric("DY 12m", f"{row.get('dy_12m', 0) * 100:.2f}%")
-        d2.metric("Vacância", f"{row.get('vacancia', 0) * 100:.1f}%")
-        d3.metric("Alavancagem", f"{row.get('alavancagem', 0) * 100:.1f}%")
-
         st.markdown(f"**🧠 Tese:** {generate_tese(row)}")
 
 
@@ -168,9 +175,7 @@ def main() -> None:
     tabs = st.tabs(["Visão geral", "Benchmarks por ticker", "Ranking diário da API", "Top 5 por setor"])
 
     with tabs[0]:
-        st.subheader("Visão geral")
         tickers_text = st.text_area("Tickers (vírgula ou quebra de linha)", value="HGLG11,XPLG11,XPML11,VISC11,KNCR11,MXRF11,HGRE11", height=140)
-
         c1, c2 = st.columns([1, 1])
         if c1.button("▶️ Rodar job diário", use_container_width=True):
             payload = run_daily_job_with_tickers(tickers_text)
@@ -182,47 +187,48 @@ def main() -> None:
         if c2.button("🔄 Atualizar painel", use_container_width=True):
             fetch_rankings.clear()
             fetch_job_status.clear()
-            st.session_state["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        st.write("**Tickers enviados no último job**")
-        st.code(", ".join(st.session_state.get("last_submitted_tickers", parse_tickers_text(tickers_text))) or "(vazio)")
 
         status = fetch_job_status()
-        st.write("**Status do último job**")
         st.json(status if status else st.session_state.get("last_job_payload", {"status": "idle"}))
         render_job_trace(status if status else {})
 
+        st.subheader("Correção manual de setor")
+        ranking = normalize_sector_col(fetch_rankings())
+        if ranking.empty:
+            st.info("Sem dados no ranking para editar setor.")
+        else:
+            ticker = st.selectbox("Ticker", options=sorted(ranking["ticker"].dropna().unique().tolist()))
+            current = ranking.loc[ranking["ticker"] == ticker, "setor"].iloc[0] if (ranking["ticker"] == ticker).any() else "outros"
+            new_sector = st.selectbox("Novo setor", options=SECTORS, index=SECTORS.index(current) if current in SECTORS else SECTORS.index("outros"))
+            new_subsetor = st.text_input("Subsetor (opcional)", value="na")
+            if st.button("Salvar override de setor"):
+                save_override(ticker, new_sector, new_subsetor)
+                st.success("Override salvo em sector_overrides.csv. Rode o job novamente para aplicar.")
+
+            ov = load_overrides()
+            if not ov.empty:
+                st.caption(f"Overrides manuais ativos: {len(ov)}")
+                st.dataframe(ov.sort_values("updated_at", ascending=False), use_container_width=True, hide_index=True)
+
     with tabs[1]:
-        st.subheader("Benchmarks por ticker")
         df = normalize_sector_col(fetch_rankings())
         if df.empty:
             st.info("Sem dados. Rode o job diário primeiro.")
         else:
-            cols = [
-                "ticker", "setor", "subsetor", "preco", "pvp", "pvp_setor_mediana", "pvp_desconto_setor", "dy_12m", "dy_setor_mediana", "dy_spread_setor", "vacancia", "inadimplencia", "alavancagem", "estabilidade_rendimentos", "score_pvp", "score_fundamental", "score_renda", "score_risco", "score_total", "classificacao",
-            ]
-            available = [c for c in cols if c in df.columns]
-            selected = st.multiselect("Colunas", available, default=available)
-            st.dataframe(df[selected if selected else available], use_container_width=True, hide_index=True)
+            cols = ["ticker", "setor", "subsetor", "preco", "pvp", "pvp_setor_mediana", "pvp_desconto_setor", "dy_12m", "dy_setor_mediana", "dy_spread_setor", "vacancia", "inadimplencia", "alavancagem", "estabilidade_rendimentos", "score_pvp", "score_fundamental", "score_renda", "score_risco", "score_total", "classificacao"]
+            cols = [c for c in cols if c in df.columns]
+            st.dataframe(df[cols], use_container_width=True, hide_index=True)
 
     with tabs[2]:
-        st.subheader("Ranking diário da API")
         df = normalize_sector_col(fetch_rankings())
         if df.empty:
             st.info("Sem ranking disponível.")
         else:
-            if "score_total" in df.columns:
-                df = df.sort_values("score_total", ascending=False)
-            selectable = df.columns.tolist()
-            default = [c for c in ["ticker", "setor", "score_pvp", "score_fundamental", "score_renda", "score_risco", "score_momentum", "score_total", "classificacao"] if c in selectable]
-            choose = st.multiselect("Selecionar colunas", selectable, default=default)
-            st.dataframe(df[choose if choose else selectable], use_container_width=True, hide_index=True)
+            st.dataframe(df.sort_values("score_total", ascending=False), use_container_width=True, hide_index=True)
 
     with tabs[3]:
-        st.subheader("Top 5 por setor")
         ranking_raw = fetch_rankings()
         status = fetch_job_status()
-
         if ranking_raw.empty:
             st.info("Sem ranking disponível para montar Top 5 por setor.")
             return
@@ -231,22 +237,25 @@ def main() -> None:
         for msg in warn_msgs:
             st.warning(msg)
 
-        st.caption(f"Colunas disponíveis: {', '.join(ranking.columns.tolist())}")
-        st.caption(f"Linhas no ranking: {len(ranking)} | Setores distintos: {ranking['setor'].nunique()}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Mapeados", int((ranking["setor"] != "outros").sum()))
+        m2.metric("Em outros", int((ranking["setor"] == "outros").sum()))
+        m3.metric("Overrides manuais", int(status.get("override_count", 0) if isinstance(status, dict) else 0))
+
+        if (ranking["setor"] == "outros").any():
+            st.caption("Tickers em 'outros': " + ", ".join(sorted(ranking.loc[ranking["setor"] == "outros", "ticker"].tolist())))
 
         c1, c2, c3 = st.columns(3)
         sectors = sorted(ranking["setor"].unique().tolist())
         selected_sector = c1.selectbox("Filtro opcional por setor", ["todos"] + sectors)
         only_positive = c2.checkbox("Somente assimetria_positiva", value=False)
         min_score = c3.slider("Score mínimo", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
-
         mode = st.radio("Visualização", options=["Modo executivo", "Modo tabela"], horizontal=True)
 
         work = ranking.copy()
         if only_positive and "classificacao" in work.columns:
             work = work[work["classificacao"] == "assimetria_positiva"]
-        if "score_total" in work.columns:
-            work = work[work["score_total"] >= min_score]
+        work = work[work["score_total"] >= min_score]
         if selected_sector != "todos":
             work = work[work["setor"] == selected_sector]
 
@@ -255,18 +264,11 @@ def main() -> None:
             return
 
         grouped_top5 = top5_by_sector(work)
-        if grouped_top5.empty or "setor" not in grouped_top5.columns:
-            st.warning("Não foi possível montar o agrupamento por setor; fallback para setor 'outros'.")
-            grouped_top5 = work.copy()
-            grouped_top5["setor"] = grouped_top5.get("setor", "outros")
-            grouped_top5 = grouped_top5.sort_values("score_total", ascending=False).head(5)
-
         total_by_sector = work.groupby("setor")["ticker"].count().to_dict()
 
         for setor in sorted(grouped_top5["setor"].unique().tolist()):
             block = grouped_top5[grouped_top5["setor"] == setor].copy()
-            total_setor = int(total_by_sector.get(setor, len(block)))
-            title = f"{SECTOR_LABELS.get(setor, setor.title())} (Top {len(block)} de {total_setor})"
+            title = f"{SECTOR_LABELS.get(setor, setor.title())} (Top {len(block)} de {int(total_by_sector.get(setor, len(block)))})"
             with st.expander(title, expanded=True):
                 if mode == "Modo tabela":
                     cols = ["ticker", "setor", "pvp", "pvp_desconto_setor", "dy_12m", "vacancia", "inadimplencia", "alavancagem", "score_pvp", "score_fundamental", "score_total", "classificacao"]
@@ -275,30 +277,6 @@ def main() -> None:
                 else:
                     for _, row in block.iterrows():
                         render_ticker_card(row)
-
-        st.divider()
-        st.subheader("Diagnóstico de tickers ausentes")
-        enviados = status.get("tickers_received", []) if isinstance(status, dict) else []
-        processados = status.get("tickers_processed", []) if isinstance(status, dict) else ranking.get("ticker", pd.Series()).tolist()
-        failed_map = status.get("tickers_failed", {}) if isinstance(status, dict) else {}
-
-        enviados_set = set(enviados)
-        processados_set = set(processados)
-        ranking_set = set(ranking["ticker"].tolist()) if "ticker" in ranking.columns else set()
-        sem_setor = ranking[ranking["setor"].isna() | (ranking["setor"].astype(str).str.strip() == "")]["ticker"].tolist()
-        ausentes = sorted(enviados_set - ranking_set)
-
-        d1, d2, d3, d4, d5 = st.columns(5)
-        d1.metric("Enviados", len(enviados_set))
-        d2.metric("Processados", len(processados_set))
-        d3.metric("Com setor atribuído", int(len(ranking_set) - len(set(sem_setor))))
-        d4.metric("Falharam", len(failed_map))
-        d5.metric("Sem setor", len(set(sem_setor)))
-
-        if ausentes:
-            rows = [{"ticker": tkr, "motivo": failed_map.get(tkr, "nao_encontrado_no_ranking")} for tkr in ausentes]
-            st.write("**Tickers ausentes no ranking**")
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":

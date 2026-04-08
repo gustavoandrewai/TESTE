@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import unicodedata
 
 import pandas as pd
 
@@ -15,10 +16,23 @@ import pandas as pd
 RANKING_FILE = Path("ranking.csv")
 JOB_STATUS_FILE = Path("job_status.json")
 FUNDAMENTALS_FILE = Path("fundamentals_mock.csv")
+TAXONOMY_FILE = Path("fii_taxonomy.csv")
+SECTOR_OVERRIDES_FILE = Path("sector_overrides.csv")
 TOP_BY_SECTOR_FILE = Path("top_by_sector.csv")
 DEFAULT_TICKERS = ["HGLG11", "XPLG11", "XPML11", "VISC11", "KNCR11", "MXRF11", "HGRE11"]
 TICKER_RE = re.compile(r"^[A-Z]{4}\d{2}$")
-CANONICAL_SECTORS = ["logistica","shopping","lajes_corporativas","renda_urbana","recebiveis_high_grade","recebiveis_high_yield","fof","hibridos","desenvolvimento","outros"]
+CANONICAL_SECTORS = [
+    "logistica",
+    "shopping",
+    "lajes_corporativas",
+    "renda_urbana",
+    "recebiveis_high_grade",
+    "recebiveis_high_yield",
+    "fof",
+    "hibridos",
+    "desenvolvimento",
+    "outros",
+]
 
 
 @dataclass
@@ -27,8 +41,20 @@ class PipelineResult:
     tickers_processed: list[str]
 
 
+def normalize_sector_name(value: str | None) -> str:
+    raw = (value or "outros").strip().lower()
+    raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    raw = re.sub(r"\s+", "_", raw)
+    aliases = {
+        "recebiveis_highgrade": "recebiveis_high_grade",
+        "recebiveis_highyield": "recebiveis_high_yield",
+        "fundo_de_fundos": "fof",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in CANONICAL_SECTORS else "outros"
+
+
 def parse_tickers_input(raw: str | list[str] | None) -> tuple[list[str], dict[str, str]]:
-    """Normaliza lista de tickers: remove vazios, espaços e duplicados (preserva ordem)."""
     if raw is None:
         candidates = []
     elif isinstance(raw, list):
@@ -59,7 +85,6 @@ def load_or_create_fundamentals_mock(path: Path = FUNDAMENTALS_FILE) -> pd.DataF
     if path.exists():
         return pd.read_csv(path)
 
-    # Base setorial profissional de referência.
     data = [
         {"ticker": "HGLG11", "setor": "logistica", "subsetor": "galpoes_prime", "pvp": 0.91, "dy_12m": 0.102, "vacancia": 0.03, "inadimplencia": 0.01, "alavancagem": 0.08, "liquidez_media": 3200000, "estabilidade_rendimentos": 0.88},
         {"ticker": "XPLG11", "setor": "logistica", "subsetor": "galpoes_modernos", "pvp": 0.89, "dy_12m": 0.106, "vacancia": 0.05, "inadimplencia": 0.01, "alavancagem": 0.12, "liquidez_media": 2600000, "estabilidade_rendimentos": 0.82},
@@ -74,6 +99,36 @@ def load_or_create_fundamentals_mock(path: Path = FUNDAMENTALS_FILE) -> pd.DataF
     return df
 
 
+def load_or_create_taxonomy(path: Path = TAXONOMY_FILE, fundamentals: pd.DataFrame | None = None) -> pd.DataFrame:
+    if path.exists():
+        df = pd.read_csv(path)
+    else:
+        src = fundamentals if fundamentals is not None else load_or_create_fundamentals_mock()
+        cols = [c for c in ["ticker", "setor", "subsetor"] if c in src.columns]
+        df = src[cols].drop_duplicates(subset=["ticker"]).copy()
+        df.to_csv(path, index=False)
+
+    if "setor" not in df.columns:
+        df["setor"] = "outros"
+    if "subsetor" not in df.columns:
+        df["subsetor"] = "na"
+    df["setor"] = df["setor"].apply(normalize_sector_name)
+    df["subsetor"] = df["subsetor"].fillna("na")
+    return df
+
+
+def load_sector_overrides(path: Path = SECTOR_OVERRIDES_FILE) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=["ticker", "setor", "subsetor", "updated_at"])
+    df = pd.read_csv(path)
+    if "setor" not in df.columns:
+        df["setor"] = "outros"
+    if "subsetor" not in df.columns:
+        df["subsetor"] = "na"
+    df["setor"] = df["setor"].apply(normalize_sector_name)
+    return df
+
+
 class DailyPipeline:
     def __init__(self, tickers: list[str] | None = None):
         parsed, parsing_errors = parse_tickers_input(tickers or DEFAULT_TICKERS)
@@ -81,6 +136,7 @@ class DailyPipeline:
         self.tickers_valid = parsed
         self.tickers_failed: dict[str, str] = dict(parsing_errors)
         self.tickers_processed: list[str] = []
+        self.override_count: int = 0
 
     def ensure_required_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
@@ -101,7 +157,7 @@ class DailyPipeline:
         for col, default in required_defaults.items():
             if col not in out.columns:
                 out[col] = default
-        out["setor"] = out["setor"].fillna("outros").astype(str).str.strip().replace({"": "outros"})
+        out["setor"] = out["setor"].apply(normalize_sector_name)
         out["subsetor"] = out["subsetor"].fillna("na").astype(str)
         return out
 
@@ -110,9 +166,22 @@ class DailyPipeline:
             self.tickers_valid = DEFAULT_TICKERS
 
         fundamentals = load_or_create_fundamentals_mock()
-        universe = self.build_universe_fundamentals(fundamentals, self.tickers_valid)
+        taxonomy = load_or_create_taxonomy(fundamentals=fundamentals)
+        overrides = load_sector_overrides()
 
-        universe["setor"] = universe["setor"].apply(self.normalize_sector)
+        universe = self.build_universe_fundamentals(fundamentals, self.tickers_valid)
+        universe = universe.drop(columns=[c for c in ["setor", "subsetor"] if c in universe.columns])
+        universe = universe.merge(taxonomy[["ticker", "setor", "subsetor"]], on="ticker", how="left")
+
+        if not overrides.empty:
+            self.override_count = int(overrides["ticker"].nunique())
+            ov = overrides.sort_values("updated_at").drop_duplicates("ticker", keep="last")
+            universe = universe.merge(ov[["ticker", "setor", "subsetor"]].rename(columns={"setor": "setor_override", "subsetor": "subsetor_override"}), on="ticker", how="left")
+            universe["setor"] = universe["setor_override"].combine_first(universe["setor"])
+            universe["subsetor"] = universe["subsetor_override"].combine_first(universe["subsetor"])
+            universe = universe.drop(columns=["setor_override", "subsetor_override"])
+
+        universe["setor"] = universe["setor"].apply(normalize_sector_name)
         universe["subsetor"] = universe["subsetor"].fillna("na")
 
         market_df, market_failures = self.collect_market_data(self.tickers_valid, universe)
@@ -129,7 +198,6 @@ class DailyPipeline:
         df = self.compute_risk_score(df)
         df = self.compute_total_score(df)
         df = self.classify_opportunity(df)
-
         df = self.ensure_required_columns(df)
 
         ordered_cols = [
@@ -141,11 +209,11 @@ class DailyPipeline:
         ranking = df[ordered_cols].sort_values("score_total", ascending=False)
         ranking.to_csv(RANKING_FILE, index=False)
 
-        top = ranking.sort_values(["setor", "score_total"], ascending=[True, False]).groupby("setor").head(5)
+        top = ranking.groupby("setor", group_keys=False).apply(lambda x: x.sort_values("score_total", ascending=False).head(5)).reset_index(drop=True)
         top.to_csv(TOP_BY_SECTOR_FILE, index=False)
 
         self.tickers_processed = ranking["ticker"].tolist()
-        self.write_job_status("success")
+        self.write_job_status("success", ranking)
         return PipelineResult(rows=len(ranking), tickers_processed=self.tickers_processed)
 
     def build_universe_fundamentals(self, fundamentals: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
@@ -156,12 +224,9 @@ class DailyPipeline:
         for ticker in tickers:
             if ticker in known_tickers:
                 continue
-            # fallback para ticker válido sem cadastro prévio fundamentalista
             missing_rows.append(
                 {
                     "ticker": ticker,
-                    "setor": "outros",
-                    "subsetor": "nao_classificado",
                     "pvp": 0.95,
                     "dy_12m": 0.10,
                     "vacancia": 0.10,
@@ -217,12 +282,8 @@ class DailyPipeline:
                 except Exception as exc:
                     failures[ticker] = f"erro_yahoo_mock_utilizado:{type(exc).__name__}"
 
-            # fallback local para maximizar processamento
             rows.append(self.mock_market_row(ticker, i, fundamentals))
-            if ticker not in failures:
-                failures[ticker] = "yahoo_indisponivel_mock_utilizado"
 
-        # ticker não entra em failure final se teve mock/sucesso e foi processado
         return pd.DataFrame(rows), {k: v for k, v in failures.items() if k not in [r["ticker"] for r in rows]}
 
     def mock_market_row(self, ticker: str, i: int, fundamentals: pd.DataFrame) -> dict:
@@ -238,12 +299,6 @@ class DailyPipeline:
             "last_day_return": -0.002 + 0.001 * (i % 5),
             "liquidez_media": liq,
         }
-
-    def normalize_sector(self, sector: str | None) -> str:
-        value = (sector or "outros").strip().lower()
-        aliases = {"fof": "fof", "fundo_de_fundos": "fof", "fii_funds": "fof"}
-        value = aliases.get(value, value)
-        return value if value in CANONICAL_SECTORS else "outros"
 
     def compute_sector_benchmarks(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
@@ -300,7 +355,7 @@ class DailyPipeline:
         out.loc[(out["score_pvp"] >= 65) & (out["score_fundamental"] >= 55) & (out["score_total"] >= 60), "classificacao"] = "assimetria_positiva"
         return out
 
-    def write_job_status(self, status: str) -> None:
+    def write_job_status(self, status: str, ranking: pd.DataFrame) -> None:
         received, _ = parse_tickers_input(self.tickers_received)
         payload = {
             "status": status,
@@ -308,7 +363,10 @@ class DailyPipeline:
             "tickers_valid_count": len(self.tickers_valid),
             "processed_count": len(self.tickers_processed),
             "failed_count": len(self.tickers_failed),
-            "sem_setor_count": int(pd.read_csv(RANKING_FILE)["setor"].isna().sum()) if RANKING_FILE.exists() else 0,
+            "mapped_count": int((ranking["setor"] != "outros").sum()),
+            "outros_count": int((ranking["setor"] == "outros").sum()),
+            "override_count": self.override_count,
+            "outros_tickers": ranking.loc[ranking["setor"] == "outros", "ticker"].tolist(),
             "tickers_received": received,
             "tickers_valid": self.tickers_valid,
             "tickers_processed": self.tickers_processed,
