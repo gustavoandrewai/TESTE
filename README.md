@@ -161,3 +161,14 @@ Nesse modo, `POST /jobs/run-daily` gera `ranking.csv` na raiz e `GET /rankings/d
 - A API executa `daily_pipeline.py` via subprocess e sobrescreve `ranking.csv` em cada execução.
 - O endpoint `GET /rankings/daily` sempre lê o arquivo mais recente.
 - O status do último job fica em `job_status.json` (`status`, `tickers`, `last_run_utc`, `processed_count`).
+
+
+## CSVs locais usados no modo simples
+- `fundamentals_mock.csv`: taxonomia setorial + fundamentos por ticker (`setor`, `subsetor`, `pvp`, `dy_12m`, `vacancia`, `inadimplencia`, `alavancagem`, `liquidez_media`, `estabilidade_rendimentos`).
+- `ranking.csv`: ranking diário completo com benchmarks de mercado + fundamentalistas + scores por bloco.
+- `top_by_sector.csv`: Top 5 por setor gerado a cada job.
+- `job_status.json`: status da última execução.
+
+Rotas extras no modo simples:
+- `GET /`
+- `GET /rankings/top-by-sector`

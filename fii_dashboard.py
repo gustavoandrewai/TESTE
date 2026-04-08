@@ -1,4 +1,4 @@
-"""Dashboard profissional/didático para FIIs com atualização manual via Yahoo Finance."""
+"""Dashboard profissional/didático para FIIs com foco em P/VP e fundamentos."""
 
 from __future__ import annotations
 
@@ -10,53 +10,13 @@ import streamlit as st
 
 
 API_BASE = "http://localhost:8000"
-WEIGHTS = {
-    "pvp_score": 0.45,
-    "fundamental_score": 0.20,
-    "income_quality_score": 0.15,
-    "risk_liquidity_score": 0.10,
-    "relative_score": 0.10,
-}
-
-
-@st.cache_data(ttl=300)
-def fetch_yahoo_snapshot(tickers: list[str]) -> pd.DataFrame:
-    import yfinance as yf
-
-    rows = []
-    for ticker in tickers:
-        yf_ticker = f"{ticker}.SA" if not ticker.endswith(".SA") else ticker
-        history = yf.Ticker(yf_ticker).history(period="6mo", interval="1d")
-        if history.empty:
-            continue
-        close = history["Close"]
-        rows.append(
-            {
-                "ticker": yf_ticker.replace(".SA", ""),
-                "preco": float(close.iloc[-1]),
-                "retorno_1m": float(close.iloc[-1] / close.iloc[max(0, len(close) - 22)] - 1) if len(close) > 22 else 0.0,
-                "retorno_6m": float(close.iloc[-1] / close.iloc[0] - 1),
-                "volatilidade": float(close.pct_change().dropna().std() * (252**0.5)),
-                "liquidez_media": float(history["Volume"].tail(21).mean()),
-            }
-        )
-    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=5)
-def fetch_api_ranking(page_size: int = 200) -> pd.DataFrame:
-    """Lê /rankings/daily aceitando respostas em formato paginado ou lista."""
+def fetch_rankings(page_size: int = 500) -> pd.DataFrame:
     try:
         payload = requests.get(f"{API_BASE}/rankings/daily?page=1&page_size={page_size}", timeout=10).json()
-        if isinstance(payload, dict):
-            items = payload.get("items", [])
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
-        if not items:
-            return pd.DataFrame()
-        return pd.DataFrame(items)
+        return pd.DataFrame(payload.get("items", [])) if isinstance(payload, dict) else pd.DataFrame(payload)
     except Exception:
         return pd.DataFrame()
 
@@ -64,179 +24,142 @@ def fetch_api_ranking(page_size: int = 200) -> pd.DataFrame:
 @st.cache_data(ttl=5)
 def fetch_job_status() -> dict:
     try:
-        response = requests.get(f"{API_BASE}/jobs/status", timeout=10)
-        if response.status_code != 200:
-            return {}
-        return response.json()
+        return requests.get(f"{API_BASE}/jobs/status", timeout=10).json()
     except Exception:
         return {}
 
 
-def render_weight_cards() -> None:
-    st.subheader("🎯 Distribuição obrigatória de pesos (score final)")
+@st.cache_data(ttl=5)
+def fetch_top_by_sector(only_positive: bool = False, sector: str | None = None) -> pd.DataFrame:
+    params = {"only_positive": only_positive}
+    if sector:
+        params["sector"] = sector
+    try:
+        payload = requests.get(f"{API_BASE}/rankings/top-by-sector", params=params, timeout=10).json()
+        return pd.DataFrame(payload.get("items", []))
+    except Exception:
+        return pd.DataFrame()
+
+
+def run_daily_job_with_tickers(tickers_text: str) -> dict:
+    tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
+    try:
+        response = requests.post(f"{API_BASE}/jobs/run-daily", params={"tickers": ",".join(tickers)}, timeout=90)
+        payload = response.json()
+        st.session_state["last_submitted_tickers"] = tickers
+        st.session_state["last_job_payload"] = payload
+        fetch_rankings.clear()
+        fetch_top_by_sector.clear()
+        fetch_job_status.clear()
+        return payload
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "tickers": tickers}
+
+
+def kpis(df: pd.DataFrame) -> None:
     cols = st.columns(5)
-    cards = [
-        ("Valuation P/VP", "45%", "Eixo dominante do modelo"),
-        ("Fundamentos", "20%", "Vacância, alavancagem, inadimplência etc."),
-        ("Rendimentos", "15%", "Qualidade e estabilidade da renda"),
-        ("Liquidez & Risco", "10%", "Liquidez média, volatilidade e drawdown"),
-        ("Relativo", "10%", "Comparação contra setor / benchmark"),
-    ]
-    for col, (label, value, note) in zip(cols, cards):
-        col.metric(label, value)
-        col.caption(note)
-
-
-def enrich_contributions(df: pd.DataFrame) -> pd.DataFrame:
-    enriched = df.copy()
-    for component, weight in WEIGHTS.items():
-        out_name = component.replace("_score", "_contrib")
-        enriched[out_name] = enriched[component] * weight
-    contribution_cols = [c for c in enriched.columns if c.endswith("_contrib")]
-    enriched["total_rebuild"] = enriched[contribution_cols].sum(axis=1)
-    return enriched
-
-
-def render_score_breakdown(df: pd.DataFrame) -> None:
-    st.subheader("📊 Decomposição do score por componente")
-    if df.empty:
-        st.info("Sem dados de score para decomposição.")
-        return
-
-    top_n = st.slider("Quantidade de FIIs no gráfico", min_value=5, max_value=min(30, len(df)), value=min(10, len(df)))
-    top = df.sort_values("total_score", ascending=False).head(top_n).copy()
-    contrib_cols = [
-        "pvp_contrib",
-        "fundamental_contrib",
-        "income_quality_contrib",
-        "risk_liquidity_contrib",
-        "relative_contrib",
-    ]
-    chart = top.set_index("ticker")[contrib_cols]
-    st.bar_chart(chart, height=360)
+    cols[0].metric("Tickers", int(len(df)))
+    cols[1].metric("Score médio", f"{df['score_total'].mean():.1f}" if "score_total" in df.columns and not df.empty else "-")
+    cols[2].metric("P/VP médio", f"{df['pvp'].mean():.2f}" if "pvp" in df.columns and not df.empty else "-")
+    cols[3].metric("DY 12m médio", f"{df['dy_12m'].mean() * 100:.2f}%" if "dy_12m" in df.columns and not df.empty else "-")
+    cols[4].metric("Assimetria positiva", int((df.get("classificacao") == "assimetria_positiva").sum()) if not df.empty else 0)
 
 
 def main() -> None:
-    st.set_page_config(page_title="FII Assimetria Dashboard", page_icon="🏢", layout="wide")
-    st.title("🏢 Dashboard Profissional de FIIs - Assimetrias por P/VP")
-    st.caption("Visão executiva + didática, com peso dominante de P/VP e atualização manual no Yahoo Finance.")
+    st.set_page_config(page_title="FII Dashboard", page_icon="🏢", layout="wide")
+    st.title("🏢 Dashboard de FIIs - P/VP + Fundamentais")
 
-    with st.expander("📘 Leitura didática", expanded=False):
-        st.markdown(
-            """
-            - O score final vai de **0 a 100**.
-            - O componente de **P/VP pesa 45%** e domina a priorização.
-            - Desconto de P/VP sem fundamento costuma virar **value trap**.
-            - Use a decomposição para enxergar *por que* um ticker ficou no topo.
-            """
-        )
+    tabs = st.tabs(["Visão geral", "Benchmarks por ticker", "Ranking diário da API", "Top 5 por setor"])
 
-    render_weight_cards()
-    st.divider()
+    with tabs[0]:
+        st.subheader("Visão geral")
+        tickers_text = st.text_input("Tickers (separados por vírgula)", value="HGLG11,XPLG11,XPML11,VISC11,KNCR11,MXRF11,HGRE11")
 
-    c1, c2, c3 = st.columns([3, 1, 1])
-    with c1:
-        tickers_text = st.text_input("Tickers Yahoo", value="HGLG11,VISC11,MXRF11,XPLG11,KNCR11")
-    with c2:
-        run_job = st.button("▶️ Rodar job diário", use_container_width=True)
-    with c3:
-        refresh = st.button("🔄 Atualizar Yahoo", type="primary", use_container_width=True)
+        c1, c2 = st.columns([1, 1])
+        if c1.button("▶️ Rodar job diário", use_container_width=True):
+            payload = run_daily_job_with_tickers(tickers_text)
+            if payload.get("status") == "success":
+                st.success("Job executado com sucesso.")
+            else:
+                st.error(f"Falha no job: {payload}")
 
-    tickers_clean = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
-    tickers_query = ",".join(tickers_clean)
-
-    if run_job:
-        try:
-            response = requests.post(
-                f"{API_BASE}/jobs/run-daily",
-                params={"tickers": tickers_query},
-                timeout=60,
-            )
-            fetch_api_ranking.clear()
+        if c2.button("🔄 Atualizar painel", use_container_width=True):
+            fetch_rankings.clear()
+            fetch_top_by_sector.clear()
             fetch_job_status.clear()
-            st.session_state["last_submitted_tickers"] = tickers_clean
-            st.session_state["last_job_response"] = response.json()
-            st.success("Job executado. Ranking atualizado com os tickers enviados.")
-        except Exception as exc:
-            st.error(f"Não foi possível acionar a API: {exc}")
+            st.session_state["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    if refresh:
-        fetch_yahoo_snapshot.clear()
-        st.session_state["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        if "last_refresh" in st.session_state:
+            st.caption(f"Último refresh manual: {st.session_state['last_refresh']}")
 
-    if "last_refresh" in st.session_state:
-        st.caption(f"Última atualização manual do Yahoo: {st.session_state['last_refresh']}")
+        st.write("**Tickers enviados no último job**")
+        st.code(", ".join(st.session_state.get("last_submitted_tickers", [t.strip().upper() for t in tickers_text.split(",") if t.strip()])))
 
-    st.subheader("🧾 Último job executado")
-    col_a, col_b = st.columns(2)
-    col_a.write("**Tickers enviados no último job:**")
-    col_a.code(", ".join(st.session_state.get("last_submitted_tickers", tickers_clean)) or "(vazio)")
+        st.write("**Status do último job**")
+        job_status = fetch_job_status()
+        st.json(job_status if job_status else st.session_state.get("last_job_payload", {"status": "idle"}))
 
-    job_status = fetch_job_status()
-    col_b.write("**Status retornado pela API:**")
-    col_b.json(job_status if job_status else st.session_state.get("last_job_response", {"status": "idle"}))
+        df = fetch_rankings()
+        kpis(df)
 
-    df_yahoo = fetch_yahoo_snapshot(tickers_clean)
+    with tabs[1]:
+        st.subheader("Benchmarks por ticker")
+        df = fetch_rankings()
+        if df.empty:
+            st.info("Sem dados. Rode o job diário primeiro.")
+        else:
+            benchmark_cols = [
+                "ticker", "setor", "subsetor", "preco", "pvp", "pvp_setor_mediana", "pvp_desconto_setor", "pvp_zscore_historico",
+                "dy_12m", "dy_setor_mediana", "dy_spread_setor", "vacancia", "inadimplencia", "alavancagem", "estabilidade_rendimentos",
+                "score_pvp", "score_fundamental", "score_renda", "score_risco", "score_total", "classificacao",
+            ]
+            available = [c for c in benchmark_cols if c in df.columns]
+            default = [c for c in ["ticker", "setor", "subsetor", "pvp", "pvp_desconto_setor", "dy_12m", "vacancia", "inadimplencia", "alavancagem", "score_pvp", "score_fundamental", "score_total", "classificacao"] if c in available]
+            selected = st.multiselect("Colunas", available, default=default)
+            view_cols = selected if selected else available
+            st.dataframe(df[view_cols], use_container_width=True, hide_index=True)
 
-    st.subheader("💹 Monitor de mercado (Yahoo Finance)")
-    if not df_yahoo.empty:
-        cols = st.columns(4)
-        cols[0].metric("Preço médio", f"R$ {df_yahoo['preco'].mean():.2f}")
-        cols[1].metric("Retorno médio 1m", f"{df_yahoo['retorno_1m'].mean() * 100:.2f}%")
-        cols[2].metric("Retorno médio 6m", f"{df_yahoo['retorno_6m'].mean() * 100:.2f}%")
-        cols[3].metric("Volatilidade média", f"{df_yahoo['volatilidade'].mean() * 100:.2f}%")
+    with tabs[2]:
+        st.subheader("Ranking diário da API")
+        df = fetch_rankings()
+        if df.empty:
+            st.info("Sem ranking disponível.")
+        else:
+            if "score_total" in df.columns:
+                df = df.sort_values("score_total", ascending=False)
+            selectable = df.columns.tolist()
+            prefer = [c for c in ["ticker", "setor", "score_pvp", "score_fundamental", "score_renda", "score_risco", "score_momentum", "score_total", "classificacao"] if c in selectable]
+            chosen = st.multiselect("Selecionar colunas do ranking", selectable, default=prefer)
+            st.dataframe(df[chosen if chosen else selectable], use_container_width=True, hide_index=True)
 
-        st.bar_chart((df_yahoo.set_index("ticker")[["retorno_1m", "retorno_6m"]] * 100), height=260)
-        st.dataframe(df_yahoo.sort_values("retorno_6m", ascending=False), use_container_width=True, hide_index=True)
-    else:
-        st.warning("Sem dados do Yahoo para os tickers selecionados.")
+    with tabs[3]:
+        st.subheader("Top 5 por setor")
+        df_all = fetch_rankings()
+        sector_options = sorted(df_all["setor"].dropna().unique().tolist()) if not df_all.empty and "setor" in df_all.columns else []
 
-    st.divider()
-    ranking_df = fetch_api_ranking()
-    if ranking_df.empty:
-        st.info("Sem ranking na API. Execute o job diário para popular o banco.")
-        return
+        c1, c2 = st.columns(2)
+        selected_sector = c1.selectbox("Filtrar setor", options=["todos"] + sector_options)
+        only_pos = c2.checkbox("Mostrar apenas assimetria_positiva", value=False)
 
-    st.subheader("🏆 Ranking diário (API)")
+        sector_param = None if selected_sector == "todos" else selected_sector
+        top_df = fetch_top_by_sector(only_positive=only_pos, sector=sector_param)
+        if top_df.empty:
+            st.info("Sem dados para Top 5 por setor.")
+        else:
+            cols = [
+                "ticker", "setor", "pvp", "pvp_desconto_setor", "dy_12m", "vacancia", "inadimplencia", "alavancagem",
+                "score_pvp", "score_fundamental", "score_total", "classificacao",
+            ]
+            cols = [c for c in cols if c in top_df.columns]
+            st.dataframe(top_df[cols], use_container_width=True, hide_index=True)
 
-    # Exibe benchmarks detalhados + score final com scroll horizontal.
-    main_cols = [
-        "ticker",
-        "price",
-        "ret_1m",
-        "ret_3m",
-        "ret_6m",
-        "last_day_return",
-        "ma_21",
-        "ma_63",
-        "dist_ma_21",
-        "dist_ma_63",
-        "high_52w",
-        "low_52w",
-        "dist_high_52w",
-        "dist_low_52w",
-        "drawdown",
-        "vol",
-        "score",
-    ]
-    available = [c for c in main_cols if c in ranking_df.columns]
-    default_cols = [c for c in ["ticker", "price", "ret_1m", "ret_3m", "ret_6m", "drawdown", "vol", "score"] if c in available]
-
-    selected_cols = st.multiselect(
-        "Escolha colunas para visualizar",
-        options=available,
-        default=default_cols,
-    )
-
-    if "score" in ranking_df.columns:
-        ranking_df = ranking_df.sort_values("score", ascending=False)
-
-    cols_to_show = selected_cols if selected_cols else available
-    st.dataframe(ranking_df[cols_to_show], use_container_width=True, hide_index=True)
-
-    if set(WEIGHTS.keys()).issubset(set(ranking_df.columns)) and "total_score" in ranking_df.columns:
-        enriched = enrich_contributions(ranking_df)
-        render_score_breakdown(enriched)
+            if "classificacao" in top_df.columns:
+                st.caption("Destaque visual: assimetria_positiva em verde.")
+                styled = top_df[cols].style.apply(
+                    lambda row: ["background-color: #d1fae5" if row.get("classificacao") == "assimetria_positiva" else "" for _ in row],
+                    axis=1,
+                )
+                st.dataframe(styled, use_container_width=True)
 
 
 if __name__ == "__main__":
