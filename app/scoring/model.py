@@ -42,8 +42,16 @@ def compute_pvp_score(current_pvp: float, sector_values: pd.Series, historical_v
     Fórmula combina desconto vs mediana setorial, posição em percentis e z-score histórico.
     Usa winsorização para reduzir impacto de outliers.
     """
-    sector_clean = sector_values.dropna().clip(lower=sector_values.quantile(0.05), upper=sector_values.quantile(0.95))
-    hist_clean = historical_values.dropna().clip(lower=historical_values.quantile(0.05), upper=historical_values.quantile(0.95))
+    sector_raw = sector_values.dropna()
+    hist_raw = historical_values.dropna()
+
+    if sector_raw.empty:
+        sector_raw = pd.Series([current_pvp])
+    if hist_raw.empty:
+        hist_raw = pd.Series([current_pvp])
+
+    sector_clean = sector_raw.clip(lower=sector_raw.quantile(0.05), upper=sector_raw.quantile(0.95))
+    hist_clean = hist_raw.clip(lower=hist_raw.quantile(0.05), upper=hist_raw.quantile(0.95))
 
     sector_median = float(sector_clean.median())
     p25 = float(sector_clean.quantile(0.25))

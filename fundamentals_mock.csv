@@ -1,0 +1,13 @@
+ticker,setor,subsetor,pvp,dy_12m,vacancia,inadimplencia,alavancagem,liquidez_media,estabilidade_rendimentos
+HGLG11,logistica,galpoes_prime,0.91,0.102,0.03,0.01,0.08,3200000,0.88
+XPLG11,logistica,galpoes_modernos,0.89,0.106,0.05,0.01,0.12,2600000,0.82
+XPML11,shopping,shoppings_dominantes,0.95,0.094,0.07,0.02,0.18,2900000,0.78
+VISC11,shopping,shoppings_hibridos,0.93,0.098,0.08,0.015,0.14,2100000,0.75
+KNCR11,recebiveis_high_grade,cri_high_grade,1.01,0.115,0.0,0.005,0.05,3700000,0.91
+MXRF11,recebiveis_high_yield,cri_high_yield,0.9,0.132,0.0,0.04,0.19,4500000,0.64
+HGRE11,lajes_corporativas,lajes_sp,0.78,0.108,0.19,0.03,0.16,1100000,0.58
+TRXF11,renda_urbana,varejo_urbano,0.97,0.111,0.02,0.01,0.21,1900000,0.8
+BCFF11,FoF,fundo_de_fundos,0.86,0.103,0.0,0.0,0.07,1300000,0.72
+HGRU11,hibridos,educacional_varejo,0.94,0.097,0.04,0.01,0.13,1550000,0.79
+DEVA11,desenvolvimento,cri_estruturado,0.66,0.145,0.0,0.1,0.32,800000,0.3
+ABCP11,outros,diversificado,0.92,0.09,0.06,0.02,0.15,600000,0.67

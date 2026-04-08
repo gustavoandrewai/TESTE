@@ -1,0 +1,13 @@
+ticker,setor,subsetor
+HGLG11,logistica,galpoes_prime
+XPLG11,logistica,galpoes_modernos
+XPML11,shopping,shoppings_dominantes
+VISC11,shopping,shoppings_hibridos
+KNCR11,recebiveis_high_grade,cri_high_grade
+MXRF11,recebiveis_high_yield,cri_high_yield
+HGRE11,lajes_corporativas,lajes_sp
+TRXF11,renda_urbana,varejo_urbano
+BCFF11,fof,fundo_de_fundos
+HGRU11,hibridos,educacional_varejo
+DEVA11,desenvolvimento,cri_estruturado
+ABCP11,outros,diversificado
