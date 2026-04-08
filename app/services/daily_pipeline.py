@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 
 import pandas as pd
 from sqlalchemy import delete, select
@@ -30,7 +30,7 @@ class DailyPipelineService:
 
     def run(self, ref_date: date | None = None) -> JobRun:
         ref_date = ref_date or date.today()
-        job = JobRun(job_name="daily_pipeline", status="running", started_at=datetime.now(UTC), details="start")
+        job = JobRun(job_name="daily_pipeline", status="running", started_at=datetime.now(timezone.utc), details="start")
         self.db.add(job)
         self.db.commit()
 
@@ -42,7 +42,7 @@ class DailyPipelineService:
         self._recompute_scoring(ref_date)
 
         job.status = "success"
-        job.finished_at = datetime.now(UTC)
+        job.finished_at = datetime.now(timezone.utc)
         job.details = "pipeline executed"
         self.db.commit()
         return job
@@ -65,17 +65,31 @@ class DailyPipelineService:
 
     def _recompute_scoring(self, ref_date: date) -> None:
         self.db.execute(delete(ScoringDaily).where(ScoringDaily.reference_date == ref_date))
-        market_rows = self.db.execute(select(MarketDaily, FundamentalsMonthly, FIIMaster).join(FundamentalsMonthly, (MarketDaily.ticker == FundamentalsMonthly.ticker) & (MarketDaily.reference_date == FundamentalsMonthly.reference_date)).join(FIIMaster, FIIMaster.ticker == MarketDaily.ticker).where(MarketDaily.reference_date == ref_date)).all()
+        market_rows = (
+            self.db.execute(
+                select(MarketDaily, FundamentalsMonthly, FIIMaster)
+                .join(
+                    FundamentalsMonthly,
+                    (MarketDaily.ticker == FundamentalsMonthly.ticker)
+                    & (MarketDaily.reference_date == FundamentalsMonthly.reference_date),
+                )
+                .join(FIIMaster, FIIMaster.ticker == MarketDaily.ticker)
+                .where(MarketDaily.reference_date == ref_date)
+            )
+            .all()
+        )
         benchmark = self.db.scalar(select(BenchmarksDaily).where(BenchmarksDaily.reference_date == ref_date))
         if not benchmark:
             return
 
-        market_df = pd.DataFrame([{**m.__dict__, "sector": f.sector} for m, _, f in market_rows])
-        hist_df = market_df.copy()
+        market_df = pd.DataFrame([{**market.__dict__, "sector": fii.sector} for market, _, fii in market_rows])
+
+        all_history_rows = self.db.execute(select(MarketDaily.ticker, MarketDaily.pvp)).all()
+        history_df = pd.DataFrame(all_history_rows, columns=["ticker", "pvp"]) if all_history_rows else pd.DataFrame(columns=["ticker", "pvp"])
 
         for market, fund, fii in market_rows:
             sector_series = market_df.loc[market_df["sector"] == fii.sector, "pvp"]
-            hist_series = hist_df.loc[hist_df["ticker"] == market.ticker, "pvp"]
+            hist_series = history_df.loc[history_df["ticker"] == market.ticker, "pvp"]
             deterioration = min(1.0, fund.delinquency + fund.financial_vacancy + fund.leverage)
             pvp_score = compute_pvp_score(market.pvp, sector_series, hist_series, deterioration)
             fundamental_score = compute_fundamental_score(pd.Series(fund.__dict__))
