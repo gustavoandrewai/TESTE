@@ -146,3 +146,11 @@ Recursos:
 - decomposição visual do score por componente (contribuições ponderadas);
 - painel setorial com score médio e líder por setor;
 - KPIs e explicação didática para leitura executiva.
+
+## Execução rápida (modo simples solicitado)
+```bash
+python -m uvicorn routes:app --reload
+python -m streamlit run fii_dashboard.py
+```
+
+Nesse modo, `POST /jobs/run-daily` gera `ranking.csv` na raiz e `GET /rankings/daily` retorna JSON paginado baseado nesse arquivo.

@@ -45,9 +45,18 @@ def fetch_yahoo_snapshot(tickers: list[str]) -> pd.DataFrame:
 
 @st.cache_data(ttl=120)
 def fetch_api_ranking(page_size: int = 200) -> pd.DataFrame:
+    """Lê /rankings/daily aceitando respostas em formato paginado ou lista."""
     try:
-        data = requests.get(f"{API_BASE}/rankings/daily?page=1&page_size={page_size}", timeout=10).json()
-        return pd.DataFrame(data.get("items", []))
+        payload = requests.get(f"{API_BASE}/rankings/daily?page=1&page_size={page_size}", timeout=10).json()
+        if isinstance(payload, dict):
+            items = payload.get("items", [])
+        elif isinstance(payload, list):
+            items = payload
+        else:
+            items = []
+        if not items:
+            return pd.DataFrame()
+        return pd.DataFrame(items)
     except Exception:
         return pd.DataFrame()
 
@@ -55,7 +64,10 @@ def fetch_api_ranking(page_size: int = 200) -> pd.DataFrame:
 @st.cache_data(ttl=120)
 def fetch_by_sector() -> dict:
     try:
-        return requests.get(f"{API_BASE}/rankings/by-sector", timeout=10).json()
+        resp = requests.get(f"{API_BASE}/rankings/by-sector", timeout=10)
+        if resp.status_code != 200:
+            return {}
+        return resp.json()
     except Exception:
         return {}
 
@@ -209,37 +221,21 @@ def main() -> None:
         st.info("Sem ranking na API. Execute o job diário para popular o banco.")
         return
 
-    enriched = enrich_contributions(ranking_df)
-
     st.subheader("🏆 Ranking diário (API)")
-    class_filter = st.multiselect(
-        "Filtrar por classificação",
-        options=sorted(enriched["classification"].dropna().unique().tolist()),
-        default=sorted(enriched["classification"].dropna().unique().tolist()),
-    )
-    filtered = enriched[enriched["classification"].isin(class_filter)] if class_filter else enriched
-    filtered = filtered.sort_values("total_score", ascending=False)
 
-    st.dataframe(
-        filtered[
-            [
-                "ticker",
-                "reference_date",
-                "classification",
-                "total_score",
-                "pvp_score",
-                "fundamental_score",
-                "income_quality_score",
-                "risk_liquidity_score",
-                "relative_score",
-            ]
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+    # Compatível com payload mínimo (ticker/price/ret_1m/ret_6m/vol/score)
+    base_cols = ["ticker", "price", "ret_1m", "ret_6m", "vol", "score"]
+    available_base = [c for c in base_cols if c in ranking_df.columns]
+    if "score" in ranking_df.columns:
+        ranking_df = ranking_df.sort_values("score", ascending=False)
 
-    render_score_breakdown(filtered)
-    render_sector_panel(fetch_by_sector())
+    st.dataframe(ranking_df[available_base] if available_base else ranking_df, use_container_width=True, hide_index=True)
+
+    # Se a API avançada estiver disponível, exibe decomposição e painel setorial.
+    if set(WEIGHTS.keys()).issubset(set(ranking_df.columns)) and "total_score" in ranking_df.columns:
+        enriched = enrich_contributions(ranking_df)
+        render_score_breakdown(enriched)
+        render_sector_panel(fetch_by_sector())
 
 
 if __name__ == "__main__":
