@@ -82,6 +82,29 @@ class DailyPipeline:
         self.tickers_failed: dict[str, str] = dict(parsing_errors)
         self.tickers_processed: list[str] = []
 
+    def ensure_required_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        required_defaults = {
+            "ticker": "",
+            "setor": "outros",
+            "subsetor": "na",
+            "pvp": 1.0,
+            "dy_12m": 0.0,
+            "vacancia": 0.0,
+            "inadimplencia": 0.0,
+            "alavancagem": 0.0,
+            "score_pvp": 0.0,
+            "score_fundamental": 0.0,
+            "score_total": 0.0,
+            "classificacao": "neutro",
+        }
+        for col, default in required_defaults.items():
+            if col not in out.columns:
+                out[col] = default
+        out["setor"] = out["setor"].fillna("outros").astype(str).str.strip().replace({"": "outros"})
+        out["subsetor"] = out["subsetor"].fillna("na").astype(str)
+        return out
+
     def run(self) -> PipelineResult:
         if not self.tickers_valid:
             self.tickers_valid = DEFAULT_TICKERS
@@ -90,7 +113,7 @@ class DailyPipeline:
         universe = self.build_universe_fundamentals(fundamentals, self.tickers_valid)
 
         universe["setor"] = universe["setor"].apply(self.normalize_sector)
-        universe["subsetor"] = universe["subsetor"].fillna("nao_classificado")
+        universe["subsetor"] = universe["subsetor"].fillna("na")
 
         market_df, market_failures = self.collect_market_data(self.tickers_valid, universe)
         self.tickers_failed.update(market_failures)
@@ -106,6 +129,8 @@ class DailyPipeline:
         df = self.compute_risk_score(df)
         df = self.compute_total_score(df)
         df = self.classify_opportunity(df)
+
+        df = self.ensure_required_columns(df)
 
         ordered_cols = [
             "ticker", "setor", "subsetor", "preco", "retorno_1m", "retorno_3m", "retorno_6m", "volatilidade", "drawdown", "last_day_return", "liquidez_media",

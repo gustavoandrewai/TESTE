@@ -88,6 +88,25 @@ def generate_tese(row: pd.Series) -> str:
     return "; ".join(frases).capitalize() + "."
 
 
+
+
+def ensure_top5_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    warnings = []
+    out = df.copy()
+    if "setor" not in out.columns:
+        out["setor"] = "outros"
+        warnings.append("Coluna setor ausente no ranking; usando 'outros' como fallback.")
+    if "subsetor" not in out.columns:
+        out["subsetor"] = "na"
+        warnings.append("Coluna subsetor ausente no ranking; usando 'na' como fallback.")
+    if "score_total" not in out.columns and "score" in out.columns:
+        out["score_total"] = out["score"]
+        warnings.append("score_total ausente; usando coluna 'score' como fallback.")
+
+    out["setor"] = out["setor"].fillna("outros").astype(str).str.strip().str.lower().replace({"": "outros"})
+    out["subsetor"] = out["subsetor"].fillna("na")
+    return out, warnings
+
 def run_daily_job_with_tickers(tickers_text: str) -> dict:
     tickers = parse_tickers_text(tickers_text)
     try:
@@ -201,12 +220,19 @@ def main() -> None:
 
     with tabs[3]:
         st.subheader("Top 5 por setor")
-        ranking = normalize_sector_col(fetch_rankings())
+        ranking_raw = fetch_rankings()
         status = fetch_job_status()
 
-        if ranking.empty:
+        if ranking_raw.empty:
             st.info("Sem ranking disponível para montar Top 5 por setor.")
             return
+
+        ranking, warn_msgs = ensure_top5_columns(ranking_raw)
+        for msg in warn_msgs:
+            st.warning(msg)
+
+        st.caption(f"Colunas disponíveis: {', '.join(ranking.columns.tolist())}")
+        st.caption(f"Linhas no ranking: {len(ranking)} | Setores distintos: {ranking['setor'].nunique()}")
 
         c1, c2, c3 = st.columns(3)
         sectors = sorted(ranking["setor"].unique().tolist())
@@ -219,14 +245,24 @@ def main() -> None:
         work = ranking.copy()
         if only_positive and "classificacao" in work.columns:
             work = work[work["classificacao"] == "assimetria_positiva"]
-        work = work[work["score_total"] >= min_score]
+        if "score_total" in work.columns:
+            work = work[work["score_total"] >= min_score]
         if selected_sector != "todos":
             work = work[work["setor"] == selected_sector]
 
+        if work.empty:
+            st.warning("Nenhum dado após filtros para Top 5 por setor.")
+            return
+
         grouped_top5 = top5_by_sector(work)
+        if grouped_top5.empty or "setor" not in grouped_top5.columns:
+            st.warning("Não foi possível montar o agrupamento por setor; fallback para setor 'outros'.")
+            grouped_top5 = work.copy()
+            grouped_top5["setor"] = grouped_top5.get("setor", "outros")
+            grouped_top5 = grouped_top5.sort_values("score_total", ascending=False).head(5)
+
         total_by_sector = work.groupby("setor")["ticker"].count().to_dict()
 
-        # Renderiza TODOS setores ao mesmo tempo por padrão.
         for setor in sorted(grouped_top5["setor"].unique().tolist()):
             block = grouped_top5[grouped_top5["setor"] == setor].copy()
             total_setor = int(total_by_sector.get(setor, len(block)))

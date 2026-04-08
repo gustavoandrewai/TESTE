@@ -85,6 +85,12 @@ def rankings_daily(page: int = Query(1, ge=1), page_size: int = Query(200, ge=1,
         return {"items": [], "page": page, "page_size": page_size, "total": 0}
 
     df = pd.read_csv(RANKING_FILE)
+    if "setor" not in df.columns:
+        df["setor"] = "outros"
+    if "subsetor" not in df.columns:
+        df["subsetor"] = "na"
+    df["setor"] = df["setor"].fillna("outros")
+    df["subsetor"] = df["subsetor"].fillna("na")
     items = df.to_dict(orient="records")
     total = len(items)
     start = (page - 1) * page_size
@@ -111,5 +117,9 @@ def top_by_sector(only_positive: bool = False, sector: str | None = None) -> dic
     if sector:
         df = df[df["setor"] == sector.lower()]
 
-    top = df.sort_values(["setor", "score_total"], ascending=[True, False]).groupby("setor", as_index=False).head(5)
+    score_col = "score_total" if "score_total" in df.columns else ("score" if "score" in df.columns else None)
+    if score_col is None:
+        return {"items": [], "total": 0, "warning": "score_total/score ausente"}
+
+    top = df.sort_values(["setor", score_col], ascending=[True, False]).groupby("setor", as_index=False).head(5)
     return {"items": top.to_dict(orient="records"), "total": int(len(top))}
