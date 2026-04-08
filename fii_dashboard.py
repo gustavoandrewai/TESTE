@@ -151,11 +151,30 @@ def render_job_trace(status: dict) -> None:
 
 
 def top5_by_sector(df: pd.DataFrame) -> pd.DataFrame:
-    return (
-        df.groupby("setor", group_keys=False)
-        .apply(lambda x: x.sort_values("score_total", ascending=False).head(5))
+    """Top 5 por setor preservando coluna `setor` no resultado final."""
+    work = df.copy()
+    if "setor" not in work.columns:
+        # caso `setor` tenha virado índice em alguma etapa
+        if getattr(work.index, "name", None) == "setor":
+            work = work.reset_index()
+        else:
+            work["setor"] = "outros"
+
+    work["setor"] = work["setor"].fillna("outros").astype(str)
+    grouped = (
+        work.sort_values(["setor", "score_total"], ascending=[True, False])
+        .groupby("setor", as_index=False)
+        .head(5)
         .reset_index(drop=True)
     )
+
+    # defesa final para não quebrar a UI
+    if "setor" not in grouped.columns:
+        if getattr(grouped.index, "name", None) == "setor":
+            grouped = grouped.reset_index()
+        else:
+            grouped["setor"] = "outros"
+    return grouped
 
 
 def render_ticker_card(row: pd.Series) -> None:
@@ -237,6 +256,10 @@ def main() -> None:
         for msg in warn_msgs:
             st.warning(msg)
 
+        with st.expander("Debug Top 5 (diagnóstico)", expanded=False):
+            st.write("Colunas ranking:", ranking.columns.tolist())
+            st.write("Shape ranking:", ranking.shape)
+
         m1, m2, m3 = st.columns(3)
         m1.metric("Mapeados", int((ranking["setor"] != "outros").sum()))
         m2.metric("Em outros", int((ranking["setor"] == "outros").sum()))
@@ -264,6 +287,16 @@ def main() -> None:
             return
 
         grouped_top5 = top5_by_sector(work)
+        if "setor" not in grouped_top5.columns:
+            st.warning("Coluna `setor` ausente no DataFrame agrupado; fallback aplicado.")
+            grouped_top5 = grouped_top5.reset_index() if getattr(grouped_top5.index, "name", None) == "setor" else grouped_top5
+            if "setor" not in grouped_top5.columns:
+                grouped_top5["setor"] = "outros"
+
+        with st.expander("Debug agrupamento (diagnóstico)", expanded=False):
+            st.write("Colunas grouped_top5:", grouped_top5.columns.tolist())
+            st.write("Shape grouped_top5:", grouped_top5.shape)
+
         total_by_sector = work.groupby("setor")["ticker"].count().to_dict()
 
         for setor in sorted(grouped_top5["setor"].unique().tolist()):
