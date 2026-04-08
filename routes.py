@@ -1,4 +1,4 @@
-"""API simples CSV-backed para FIIs."""
+"""API simples CSV-backed para FIIs com suporte a listas grandes de tickers."""
 
 from __future__ import annotations
 
@@ -9,12 +9,17 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, Query
+from pydantic import BaseModel
 
 
-app = FastAPI(title="FII Simple API", version="1.2.0")
+app = FastAPI(title="FII Simple API", version="1.3.0")
 RANKING_FILE = Path("ranking.csv")
 JOB_STATUS_FILE = Path("job_status.json")
 TOP_BY_SECTOR_FILE = Path("top_by_sector.csv")
+
+
+class RunDailyBody(BaseModel):
+    tickers: list[str] = []
 
 
 @app.get("/")
@@ -28,16 +33,29 @@ def health() -> dict:
 
 
 @app.post("/jobs/run-daily")
-def run_daily_job(tickers: str = Query("", description="Tickers separados por vÃ­rgula")) -> dict:
-    cmd = [sys.executable, "daily_pipeline.py"]
-    if tickers.strip():
-        cmd.extend(["--tickers", tickers])
+def run_daily_job(body: RunDailyBody | None = None, tickers: str = Query("", description="Fallback query string")) -> dict:
+    # Prioridade para BODY JSON (listas grandes). Query string permanece como fallback.
+    tickers_list: list[str] = []
+    if body and body.tickers:
+        tickers_list = body.tickers
+    elif tickers.strip():
+        tickers_list = [t.strip() for t in tickers.split(",") if t.strip()]
 
+    cmd = [sys.executable, "daily_pipeline.py", "--tickers-json", json.dumps(tickers_list, ensure_ascii=False)]
     completed = subprocess.run(cmd, capture_output=True, text=True)
-    if completed.returncode != 0:
-        return {"status": "error", "message": completed.stderr.strip() or "Falha ao executar pipeline"}
 
-    response = {"status": "success", "message": "ranking.csv atualizado", "tickers": tickers}
+    if completed.returncode != 0:
+        return {
+            "status": "error",
+            "message": completed.stderr.strip() or "Falha ao executar pipeline",
+            "tickers_enviados": tickers_list,
+        }
+
+    response = {
+        "status": "success",
+        "message": "ranking.csv atualizado",
+        "tickers_enviados": tickers_list,
+    }
     if JOB_STATUS_FILE.exists():
         response["job_status"] = json.loads(JOB_STATUS_FILE.read_text(encoding="utf-8"))
     return response
@@ -46,12 +64,23 @@ def run_daily_job(tickers: str = Query("", description="Tickers separados por vÃ
 @app.get("/jobs/status")
 def jobs_status() -> dict:
     if not JOB_STATUS_FILE.exists():
-        return {"status": "idle", "tickers": [], "last_run_utc": None, "processed_count": 0}
+        return {
+            "status": "idle",
+            "tickers_received_count": 0,
+            "tickers_valid_count": 0,
+            "processed_count": 0,
+            "failed_count": 0,
+            "tickers_received": [],
+            "tickers_valid": [],
+            "tickers_processed": [],
+            "tickers_failed": {},
+            "last_run_utc": None,
+        }
     return json.loads(JOB_STATUS_FILE.read_text(encoding="utf-8"))
 
 
 @app.get("/rankings/daily")
-def rankings_daily(page: int = Query(1, ge=1), page_size: int = Query(200, ge=1, le=1000)) -> dict:
+def rankings_daily(page: int = Query(1, ge=1), page_size: int = Query(200, ge=1, le=5000)) -> dict:
     if not RANKING_FILE.exists():
         return {"items": [], "page": page, "page_size": page_size, "total": 0}
 
