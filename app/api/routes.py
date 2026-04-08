@@ -1,10 +1,10 @@
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.entities import BenchmarksDaily, JobRun, ScoringDaily
+from app.models.entities import BenchmarksDaily, FIIMaster, JobRun, ScoringDaily
 from app.repositories.fii_repository import FIIRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.fii import FIISchema, ScoringSchema
@@ -57,10 +57,25 @@ def rankings_daily(
 
 @router.get("/rankings/by-sector")
 def rankings_by_sector(db: Session = Depends(get_db)):
-    rows = db.execute(select(ScoringDaily).order_by(ScoringDaily.reference_date.desc())).scalars().all()
+    latest_date = db.scalar(select(func.max(ScoringDaily.reference_date)))
+    if not latest_date:
+        return {}
+
+    rows = (
+        db.execute(
+            select(FIIMaster.sector, ScoringDaily.ticker, ScoringDaily.total_score, ScoringDaily.classification)
+            .join(FIIMaster, FIIMaster.ticker == ScoringDaily.ticker)
+            .where(ScoringDaily.reference_date == latest_date)
+            .order_by(FIIMaster.sector, ScoringDaily.total_score.desc())
+        )
+        .all()
+    )
+
     grouped: dict[str, list[dict]] = {}
-    for row in rows:
-        grouped.setdefault(row.classification, []).append({"ticker": row.ticker, "score": row.total_score})
+    for sector, ticker, score, classification in rows:
+        grouped.setdefault(sector, []).append(
+            {"ticker": ticker, "score": score, "classification": classification, "reference_date": latest_date}
+        )
     return grouped
 
 
