@@ -140,6 +140,9 @@ streamlit run fii_dashboard.py
 ```
 
 Recursos:
-- botão **🔄 Atualizar informações do Yahoo** para refresh manual imediato;
+- botão **🔄 Atualizar Yahoo** para refresh manual imediato dos preços;
 - botão **▶️ Rodar job diário** para acionar a API e recalcular o ranking;
-- KPIs e gráficos para leitura executiva + explicação didática no topo.
+- cards explícitos com a distribuição obrigatória dos pesos (**45/20/15/10/10**);
+- decomposição visual do score por componente (contribuições ponderadas);
+- painel setorial com score médio e líder por setor;
+- KPIs e explicação didática para leitura executiva.
