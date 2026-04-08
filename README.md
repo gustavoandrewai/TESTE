@@ -132,3 +132,17 @@ Além do refresh, a aba traz uma visão mais profissional com:
 2. P/VP domina o score com bloco matemático explícito e auditável.
 3. Provider abstrato para permitir integração gradual com fontes oficiais sem quebrar API.
 4. Pipeline diário transacional com registro em `job_runs`.
+
+## Dashboard profissional (Yahoo + API)
+Execute:
+```bash
+streamlit run fii_dashboard.py
+```
+
+Recursos:
+- botão **🔄 Atualizar Yahoo** para refresh manual imediato dos preços;
+- botão **▶️ Rodar job diário** para acionar a API e recalcular o ranking;
+- cards explícitos com a distribuição obrigatória dos pesos (**45/20/15/10/10**);
+- decomposição visual do score por componente (contribuições ponderadas);
+- painel setorial com score médio e líder por setor;
+- KPIs e explicação didática para leitura executiva.
