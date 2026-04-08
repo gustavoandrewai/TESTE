@@ -94,16 +94,22 @@ def rankings_daily(page: int = Query(1, ge=1), page_size: int = Query(200, ge=1,
 
 @app.get("/rankings/top-by-sector")
 def top_by_sector(only_positive: bool = False, sector: str | None = None) -> dict:
-    if TOP_BY_SECTOR_FILE.exists():
+    if RANKING_FILE.exists():
+        df = pd.read_csv(RANKING_FILE)
+    elif TOP_BY_SECTOR_FILE.exists():
         df = pd.read_csv(TOP_BY_SECTOR_FILE)
-    elif RANKING_FILE.exists():
-        df = pd.read_csv(RANKING_FILE).sort_values(["setor", "score_total"], ascending=[True, False]).groupby("setor").head(5)
     else:
         return {"items": [], "total": 0}
 
-    if sector:
-        df = df[df["setor"] == sector]
+    if "setor" not in df.columns:
+        df["setor"] = "outros"
+    df["setor"] = df["setor"].fillna("outros").astype(str).str.strip().str.lower().replace({"": "outros", "fof": "fof", "FoF": "fof"})
+
     if only_positive and "classificacao" in df.columns:
         df = df[df["classificacao"] == "assimetria_positiva"]
 
-    return {"items": df.to_dict(orient="records"), "total": int(len(df))}
+    if sector:
+        df = df[df["setor"] == sector.lower()]
+
+    top = df.sort_values(["setor", "score_total"], ascending=[True, False]).groupby("setor", as_index=False).head(5)
+    return {"items": top.to_dict(orient="records"), "total": int(len(top))}

@@ -155,18 +155,81 @@ def main() -> None:
     with tabs[3]:
         st.subheader("Top 5 por setor")
         ranking = fetch_rankings()
-        sectors = sorted(ranking["setor"].dropna().unique().tolist()) if (not ranking.empty and "setor" in ranking.columns) else []
-        c1, c2 = st.columns(2)
-        sector = c1.selectbox("Filtrar setor", ["todos"] + sectors)
-        only_positive = c2.checkbox("Somente assimetria_positiva", value=False)
+        status = fetch_job_status()
 
-        top_df = fetch_top_by_sector(only_positive=only_positive, sector=None if sector == "todos" else sector)
-        if top_df.empty:
-            st.info("Sem dados para Top 5 por setor.")
+        if ranking.empty:
+            st.info("Sem ranking disponível para montar Top 5 por setor.")
         else:
+            if "setor" not in ranking.columns:
+                ranking["setor"] = "outros"
+
+            ranking["setor"] = (
+                ranking["setor"]
+                .fillna("outros")
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .replace({"": "outros", "FoF": "fof", "fof": "fof"})
+            )
+
+            c1, c2 = st.columns(2)
+            sectors = sorted(ranking["setor"].unique().tolist())
+            sector = c1.selectbox("Filtrar setor", ["todos"] + sectors)
+            only_positive = c2.checkbox("Somente assimetria_positiva", value=False)
+
+            work = ranking.copy()
+            if only_positive and "classificacao" in work.columns:
+                work = work[work["classificacao"] == "assimetria_positiva"]
+
+            if sector != "todos":
+                work = work[work["setor"] == sector]
+
+            grouped = (
+                work.sort_values(["setor", "score_total"], ascending=[True, False])
+                .groupby("setor", as_index=False)
+                .head(5)
+            )
+
             cols = ["ticker", "setor", "pvp", "pvp_desconto_setor", "dy_12m", "vacancia", "inadimplencia", "alavancagem", "score_pvp", "score_fundamental", "score_total", "classificacao"]
-            cols = [c for c in cols if c in top_df.columns]
-            st.dataframe(top_df[cols], use_container_width=True, hide_index=True)
+            cols = [c for c in cols if c in grouped.columns]
+
+            # Todos os setores na mesma tela, separados visualmente.
+            for sector_name in sorted(grouped["setor"].unique().tolist()):
+                block = grouped[grouped["setor"] == sector_name].copy()
+                with st.expander(f"{sector_name} (Top {len(block)})", expanded=True):
+                    st.dataframe(block[cols], use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("Diagnóstico de tickers ausentes")
+            enviados = status.get("tickers_received", []) if isinstance(status, dict) else []
+            processados = status.get("tickers_processed", []) if isinstance(status, dict) else ranking.get("ticker", pd.Series()).tolist()
+            failed_map = status.get("tickers_failed", {}) if isinstance(status, dict) else {}
+
+            enviados_set = set(enviados)
+            processados_set = set(processados)
+            ranking_set = set(ranking["ticker"].tolist()) if "ticker" in ranking.columns else set()
+            sem_setor = ranking[ranking["setor"].isna() | (ranking["setor"].astype(str).str.strip() == "")]["ticker"].tolist()
+            fora_ranking = sorted((enviados_set & processados_set) - ranking_set)
+            ausentes = sorted(enviados_set - ranking_set)
+
+            d1, d2, d3, d4, d5 = st.columns(5)
+            d1.metric("Enviados", len(enviados_set))
+            d2.metric("Processados", len(processados_set))
+            d3.metric("Com setor atribuído", int(len(ranking_set) - len(set(sem_setor))))
+            d4.metric("Falharam", len(failed_map))
+            d5.metric("Sem setor", len(set(sem_setor)))
+
+            if ausentes:
+                st.write("**Tickers ausentes no ranking**")
+                rows = []
+                for tkr in ausentes:
+                    motivo = failed_map.get(tkr, "nao_encontrado_no_ranking")
+                    rows.append({"ticker": tkr, "motivo": motivo})
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            if fora_ranking:
+                st.write("**Enviados e processados, mas fora da tabela final**")
+                st.code(", ".join(fora_ranking))
 
 
 if __name__ == "__main__":

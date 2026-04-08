@@ -18,6 +18,7 @@ FUNDAMENTALS_FILE = Path("fundamentals_mock.csv")
 TOP_BY_SECTOR_FILE = Path("top_by_sector.csv")
 DEFAULT_TICKERS = ["HGLG11", "XPLG11", "XPML11", "VISC11", "KNCR11", "MXRF11", "HGRE11"]
 TICKER_RE = re.compile(r"^[A-Z]{4}\d{2}$")
+CANONICAL_SECTORS = ["logistica","shopping","lajes_corporativas","renda_urbana","recebiveis_high_grade","recebiveis_high_yield","fof","hibridos","desenvolvimento","outros"]
 
 
 @dataclass
@@ -87,6 +88,9 @@ class DailyPipeline:
 
         fundamentals = load_or_create_fundamentals_mock()
         universe = self.build_universe_fundamentals(fundamentals, self.tickers_valid)
+
+        universe["setor"] = universe["setor"].apply(self.normalize_sector)
+        universe["subsetor"] = universe["subsetor"].fillna("nao_classificado")
 
         market_df, market_failures = self.collect_market_data(self.tickers_valid, universe)
         self.tickers_failed.update(market_failures)
@@ -210,6 +214,12 @@ class DailyPipeline:
             "liquidez_media": liq,
         }
 
+    def normalize_sector(self, sector: str | None) -> str:
+        value = (sector or "outros").strip().lower()
+        aliases = {"fof": "fof", "fundo_de_fundos": "fof", "fii_funds": "fof"}
+        value = aliases.get(value, value)
+        return value if value in CANONICAL_SECTORS else "outros"
+
     def compute_sector_benchmarks(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
         out["pvp_setor_mediana"] = out.groupby("setor")["pvp"].transform("median")
@@ -273,6 +283,7 @@ class DailyPipeline:
             "tickers_valid_count": len(self.tickers_valid),
             "processed_count": len(self.tickers_processed),
             "failed_count": len(self.tickers_failed),
+            "sem_setor_count": int(pd.read_csv(RANKING_FILE)["setor"].isna().sum()) if RANKING_FILE.exists() else 0,
             "tickers_received": received,
             "tickers_valid": self.tickers_valid,
             "tickers_processed": self.tickers_processed,
