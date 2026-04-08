@@ -132,3 +132,32 @@ Além do refresh, a aba traz uma visão mais profissional com:
 2. P/VP domina o score com bloco matemático explícito e auditável.
 3. Provider abstrato para permitir integração gradual com fontes oficiais sem quebrar API.
 4. Pipeline diário transacional com registro em `job_runs`.
+
+## Dashboard profissional (Yahoo + API)
+Execute:
+```bash
+streamlit run fii_dashboard.py
+```
+
+Recursos:
+- botão **🔄 Atualizar Yahoo** para refresh manual imediato dos preços;
+- botão **▶️ Rodar job diário** para acionar a API e recalcular o ranking;
+- cards explícitos com a distribuição obrigatória dos pesos (**45/20/15/10/10**);
+- decomposição visual do score por componente (contribuições ponderadas);
+- painel setorial com score médio e líder por setor;
+- KPIs e explicação didática para leitura executiva.
+
+## Execução rápida (modo simples solicitado)
+```bash
+python -m uvicorn routes:app --reload
+python -m streamlit run fii_dashboard.py
+```
+
+Nesse modo, `POST /jobs/run-daily` gera `ranking.csv` na raiz e `GET /rankings/daily` retorna JSON paginado baseado nesse arquivo.
+
+
+### Comportamento do job dinâmico por ticker
+- O dashboard envia os tickers digitados para `POST /jobs/run-daily?tickers=...`.
+- A API executa `daily_pipeline.py` via subprocess e sobrescreve `ranking.csv` em cada execução.
+- O endpoint `GET /rankings/daily` sempre lê o arquivo mais recente.
+- O status do último job fica em `job_status.json` (`status`, `tickers`, `last_run_utc`, `processed_count`).
