@@ -1,9 +1,8 @@
-import { NewsletterStatus, RunStatus, RunType } from "@prisma/client";
 import { MockAIProvider } from "@/lib/ai/mock-provider";
 import { OpenAIProvider } from "@/lib/ai/openai-provider";
+import { prisma } from "@/lib/db/prisma";
 import { MockEmailProvider } from "@/lib/email/mock-provider";
 import { ResendProvider } from "@/lib/email/resend-provider";
-import { prisma } from "@/lib/db/prisma";
 import { deduplicateNews } from "@/lib/news/deduplication";
 import { MockNewsProvider } from "@/lib/news/mock-provider";
 import { normalizeNews } from "@/lib/news/normalization";
@@ -25,15 +24,16 @@ function selectEmailProvider() {
   return process.env.EMAIL_PROVIDER === "resend" ? new ResendProvider() : new MockEmailProvider();
 }
 
-export async function runNewsletterPipeline(runType: RunType = RunType.MANUAL) {
+export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "MANUAL") {
   const startedAt = new Date();
-  const runLog = await prisma.runLog.create({ data: { jobType: "newsletter_pipeline", status: RunStatus.RUNNING, startedAt } });
+  const runLog = await prisma.runLog.create({ data: { jobType: "newsletter_pipeline", status: "RUNNING", startedAt } });
 
   try {
     const raw = await selectNewsProvider().fetchLatestNews();
     const normalized = normalizeNews(raw);
     const deduped = deduplicateNews(normalized);
     const ranked = rankNews(deduped).slice(0, 15);
+
     if (!ranked.length) throw new Error("Nenhuma notícia relevante encontrada.");
 
     const draft = await selectAIProvider().generateEditorial({ news: ranked });
@@ -45,7 +45,7 @@ export async function runNewsletterPipeline(runType: RunType = RunType.MANUAL) {
         subject: draft.subject,
         htmlContent,
         textContent,
-        status: NewsletterStatus.GENERATED,
+        status: "GENERATED",
         runType,
         items: {
           create: ranked.map((item) => ({
@@ -56,7 +56,7 @@ export async function runNewsletterPipeline(runType: RunType = RunType.MANUAL) {
             sourceUrl: item.sourceUrl,
             publishedAt: item.publishedAt,
             relevanceScore: item.relevanceScore || 0,
-            rawData: item
+            rawData: JSON.stringify(item)
           }))
         }
       }
@@ -64,7 +64,7 @@ export async function runNewsletterPipeline(runType: RunType = RunType.MANUAL) {
 
     await prisma.runLog.update({
       where: { id: runLog.id },
-      data: { status: RunStatus.SUCCESS, finishedAt: new Date(), durationMs: Date.now() - startedAt.getTime() }
+      data: { status: "SUCCESS", finishedAt: new Date(), durationMs: Date.now() - startedAt.getTime() }
     });
 
     return newsletter;
@@ -72,7 +72,7 @@ export async function runNewsletterPipeline(runType: RunType = RunType.MANUAL) {
     await prisma.runLog.update({
       where: { id: runLog.id },
       data: {
-        status: RunStatus.FAILED,
+        status: "FAILED",
         finishedAt: new Date(),
         durationMs: Date.now() - startedAt.getTime(),
         errorMessage: error instanceof Error ? error.message : "Erro desconhecido"
@@ -90,6 +90,7 @@ export async function sendNewsletter(newsletterId: string) {
   if (!recipients.length) throw new Error("Sem destinatários ativos");
 
   const provider = selectEmailProvider();
+
   for (const recipient of recipients) {
     try {
       const result = await provider.send({
@@ -122,5 +123,5 @@ export async function sendNewsletter(newsletterId: string) {
     }
   }
 
-  await prisma.newsletter.update({ where: { id: newsletterId }, data: { status: NewsletterStatus.SENT, sentAt: new Date() } });
+  await prisma.newsletter.update({ where: { id: newsletterId }, data: { status: "SENT", sentAt: new Date() } });
 }

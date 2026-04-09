@@ -1,85 +1,87 @@
--- Initial schema generated for MVP
-CREATE TYPE "UserRole" AS ENUM ('ADMIN');
-CREATE TYPE "NewsletterStatus" AS ENUM ('DRAFT', 'GENERATED', 'SCHEDULED', 'SENT', 'FAILED');
-CREATE TYPE "RunType" AS ENUM ('MANUAL', 'SCHEDULED');
-CREATE TYPE "RunStatus" AS ENUM ('RUNNING', 'SUCCESS', 'FAILED');
-
+-- SQLite initial migration for portable local mode
 CREATE TABLE "User" (
-  "id" TEXT PRIMARY KEY,
-  "email" TEXT UNIQUE NOT NULL,
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "email" TEXT NOT NULL,
   "passwordHash" TEXT NOT NULL,
   "name" TEXT NOT NULL,
-  "role" "UserRole" NOT NULL DEFAULT 'ADMIN',
-  "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMP NOT NULL
+  "role" TEXT NOT NULL DEFAULT 'ADMIN',
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" DATETIME NOT NULL
 );
+CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
 CREATE TABLE "Recipient" (
-  "id" TEXT PRIMARY KEY,
+  "id" TEXT NOT NULL PRIMARY KEY,
   "name" TEXT NOT NULL,
-  "email" TEXT UNIQUE NOT NULL,
+  "email" TEXT NOT NULL,
   "active" BOOLEAN NOT NULL DEFAULT true,
-  "tags" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-  "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMP NOT NULL
+  "tags" TEXT NOT NULL DEFAULT '[]',
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" DATETIME NOT NULL
 );
+CREATE UNIQUE INDEX "Recipient_email_key" ON "Recipient"("email");
 
 CREATE TABLE "Newsletter" (
-  "id" TEXT PRIMARY KEY,
+  "id" TEXT NOT NULL PRIMARY KEY,
   "subject" TEXT NOT NULL,
-  "slug" TEXT UNIQUE,
+  "slug" TEXT,
   "htmlContent" TEXT NOT NULL,
   "textContent" TEXT NOT NULL,
-  "status" "NewsletterStatus" NOT NULL DEFAULT 'DRAFT',
-  "runType" "RunType" NOT NULL,
-  "scheduledFor" TIMESTAMP,
-  "generatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "sentAt" TIMESTAMP,
-  "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMP NOT NULL
+  "status" TEXT NOT NULL DEFAULT 'DRAFT',
+  "runType" TEXT NOT NULL,
+  "scheduledFor" DATETIME,
+  "generatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "sentAt" DATETIME,
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" DATETIME NOT NULL
 );
+CREATE UNIQUE INDEX "Newsletter_slug_key" ON "Newsletter"("slug");
 
 CREATE TABLE "NewsletterItem" (
-  "id" TEXT PRIMARY KEY,
-  "newsletterId" TEXT NOT NULL REFERENCES "Newsletter"("id") ON DELETE CASCADE,
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "newsletterId" TEXT NOT NULL,
   "section" TEXT NOT NULL,
   "title" TEXT NOT NULL,
   "summary" TEXT NOT NULL,
   "sourceName" TEXT NOT NULL,
   "sourceUrl" TEXT NOT NULL,
-  "publishedAt" TIMESTAMP NOT NULL,
-  "relevanceScore" DOUBLE PRECISION NOT NULL,
-  "rawData" JSONB,
-  "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  "publishedAt" DATETIME NOT NULL,
+  "relevanceScore" REAL NOT NULL,
+  "rawData" TEXT,
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "NewsletterItem_newsletterId_fkey" FOREIGN KEY ("newsletterId") REFERENCES "Newsletter" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE "DeliveryLog" (
-  "id" TEXT PRIMARY KEY,
-  "newsletterId" TEXT NOT NULL REFERENCES "Newsletter"("id") ON DELETE CASCADE,
-  "recipientId" TEXT NOT NULL REFERENCES "Recipient"("id") ON DELETE CASCADE,
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "newsletterId" TEXT NOT NULL,
+  "recipientId" TEXT NOT NULL,
   "provider" TEXT NOT NULL,
   "status" TEXT NOT NULL,
   "providerMessageId" TEXT,
   "errorMessage" TEXT,
-  "sentAt" TIMESTAMP,
-  "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  "sentAt" DATETIME,
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "DeliveryLog_newsletterId_fkey" FOREIGN KEY ("newsletterId") REFERENCES "Newsletter" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT "DeliveryLog_recipientId_fkey" FOREIGN KEY ("recipientId") REFERENCES "Recipient" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE "RunLog" (
-  "id" TEXT PRIMARY KEY,
+  "id" TEXT NOT NULL PRIMARY KEY,
   "jobType" TEXT NOT NULL,
-  "status" "RunStatus" NOT NULL,
-  "startedAt" TIMESTAMP NOT NULL,
-  "finishedAt" TIMESTAMP,
+  "status" TEXT NOT NULL,
+  "startedAt" DATETIME NOT NULL,
+  "finishedAt" DATETIME,
   "durationMs" INTEGER,
   "errorMessage" TEXT,
-  "metadata" JSONB,
-  "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  "metadata" TEXT,
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE "AppSetting" (
-  "id" TEXT PRIMARY KEY,
-  "key" TEXT UNIQUE NOT NULL,
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "key" TEXT NOT NULL,
   "value" TEXT NOT NULL,
-  "updatedAt" TIMESTAMP NOT NULL
+  "updatedAt" DATETIME NOT NULL
 );
+CREATE UNIQUE INDEX "AppSetting_key_key" ON "AppSetting"("key");

@@ -3,31 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-enum UserRole {
-  ADMIN
-}
-
-enum NewsletterStatus {
-  DRAFT
-  GENERATED
-  SCHEDULED
-  SENT
-  FAILED
-}
-
-enum RunType {
-  MANUAL
-  SCHEDULED
-}
-
-enum RunStatus {
-  RUNNING
-  SUCCESS
-  FAILED
+  provider = "sqlite"
+  url      = env("DATABASE_URL_PRISMA")
 }
 
 model User {
@@ -35,7 +12,7 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
-  role         UserRole @default(ADMIN)
+  role         String   @default("ADMIN")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -45,27 +22,27 @@ model Recipient {
   name        String
   email       String        @unique
   active      Boolean       @default(true)
-  tags        String[]      @default([])
+  tags        String        @default("[]")
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   deliveryLog DeliveryLog[]
 }
 
 model Newsletter {
-  id            String           @id @default(cuid())
-  subject       String
-  slug          String?          @unique
-  htmlContent   String
-  textContent   String
-  status        NewsletterStatus @default(DRAFT)
-  runType       RunType
-  scheduledFor  DateTime?
-  generatedAt   DateTime         @default(now())
-  sentAt        DateTime?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  items         NewsletterItem[]
-  deliveryLogs  DeliveryLog[]
+  id           String           @id @default(cuid())
+  subject      String
+  slug         String?          @unique
+  htmlContent  String
+  textContent  String
+  status       String           @default("DRAFT")
+  runType      String
+  scheduledFor DateTime?
+  generatedAt  DateTime         @default(now())
+  sentAt       DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  items        NewsletterItem[]
+  deliveryLogs DeliveryLog[]
 }
 
 model NewsletterItem {
@@ -78,7 +55,7 @@ model NewsletterItem {
   sourceUrl      String
   publishedAt    DateTime
   relevanceScore Float
-  rawData        Json?
+  rawData        String?
   createdAt      DateTime   @default(now())
   newsletter     Newsletter @relation(fields: [newsletterId], references: [id], onDelete: Cascade)
 }
@@ -100,12 +77,12 @@ model DeliveryLog {
 model RunLog {
   id           String    @id @default(cuid())
   jobType      String
-  status       RunStatus
+  status       String
   startedAt    DateTime
   finishedAt   DateTime?
   durationMs   Int?
   errorMessage String?
-  metadata     Json?
+  metadata     String?
   createdAt    DateTime  @default(now())
 }
 

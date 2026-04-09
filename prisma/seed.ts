@@ -1,8 +1,8 @@
-import { prisma } from "@/lib/db/prisma";
 import { hashPassword } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 
 async function main() {
-  const email = process.env.ADMIN_EMAIL || "admin@example.com";
+  const email = process.env.ADMIN_EMAIL || "admin@local";
   const password = process.env.ADMIN_PASSWORD || "admin123";
 
   await prisma.user.upsert({
@@ -11,7 +11,8 @@ async function main() {
     create: {
       email,
       name: "Admin",
-      passwordHash: hashPassword(password)
+      passwordHash: hashPassword(password),
+      role: "ADMIN"
     }
   });
 
@@ -22,4 +23,6 @@ async function main() {
   });
 }
 
-main().finally(() => prisma.$disconnect());
+main().finally(async () => {
+  await prisma.$disconnect();
+});

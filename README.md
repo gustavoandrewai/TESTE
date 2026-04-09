@@ -1,102 +1,64 @@
 # Global Market Morning Brief
 
-MVP full-stack em Next.js + Prisma para geração, preview e envio de newsletter diária de mercados globais em português.
+MVP full-stack (Next.js + Prisma) com execução **portátil para Windows corporativo sem Node global**.
 
-## Arquitetura
+## Zero-config no Windows (sem admin)
 
-- **App Router** com páginas administrativas (`/dashboard`, `/recipients`, `/newsletters`, `/settings`).
-- **Pipeline desacoplado** em módulos:
-  - `lib/news`: ingestão, normalização, deduplicação, ranking.
-  - `lib/ai`: abstração `AIProvider` com implementações `mock` e `openai`.
-  - `lib/render`: renderização HTML/texto da newsletter.
-  - `lib/email`: abstração `EmailProvider` com `mock` e `resend`.
-  - `lib/pipeline`: orquestração ponta a ponta com persistência e logs.
-  - `lib/scheduler`: lock simples para evitar concorrência.
-- **Persistência** via PostgreSQL + Prisma.
-- **Validação** via Zod.
-- **Testes** via Vitest.
+1. Clone ou extraia o projeto.
+2. Dê duplo clique em **`start.bat`**.
+3. O script faz automaticamente:
+   - valida/download do Node portátil em `runtime/node`
+   - criação de `.env` padrão (se não existir)
+   - `npm install`
+   - `prisma generate`
+   - `prisma migrate dev`
+   - `npm run dev`
+4. O navegador abre em: `http://localhost:3000/dashboard`
 
-## Estrutura de pastas
+> Sem instalação global de Node/npm/npx.
 
-```text
-app/
-  (admin)/
-  api/
-  login/
-components/
-lib/
-  ai/
-  auth/
-  db/
-  email/
-  news/
-  pipeline/
-  render/
-  scheduler/
-  validation/
-prisma/
-prompts/
-tests/
-```
+## Scripts portáteis
 
-## Setup local
+- `setup.bat`: baixa e extrai Node oficial (`zip`) para `runtime/node`.
+- `start.bat`: bootstrap completo + start da aplicação.
 
-1. Instale dependências:
-   ```bash
-   npm install
-   ```
-2. Copie variáveis:
-   ```bash
-   cp .env.example .env
-   ```
-3. Suba PostgreSQL (ex.: Docker) e ajuste `DATABASE_URL`.
-4. Gere cliente e aplique migration:
-   ```bash
-   npx prisma generate
-   npx prisma migrate deploy
-   ```
-5. Seed do admin e configurações iniciais:
-   ```bash
-   npx tsx prisma/seed.ts
-   ```
-6. Rode aplicação:
-   ```bash
-   npm run dev
-   ```
+## Ambiente local padrão
+
+`.env` automático (quando ausente):
+
+- `DATABASE_URL="sqlite:./dev.db"`
+- `DATABASE_URL_PRISMA="file:./dev.db"`
+- `ADMIN_EMAIL="admin@local"`
+- `ADMIN_PASSWORD="admin123"`
+- demais variáveis com defaults seguros para dev.
+
+## Banco de dados
+
+- Prisma configurado com **SQLite** por padrão.
+- Arquivo local: `dev.db` na raiz do projeto.
+- Não requer PostgreSQL para rodar local.
+
+## Stack
+
+- Next.js App Router + TypeScript
+- Prisma ORM
+- Tailwind CSS
+- Zod
+- OpenAI Responses API (opcional, via `AI_PROVIDER=openai`)
+- Resend (opcional, via `EMAIL_PROVIDER=resend`)
 
 ## Fluxos principais
 
-- **Rodar agora**: botão no Dashboard chama `POST /api/newsletters/run` e abre preview.
-- **Enviar agora**: em `/newsletters/[id]`, chama `POST /api/newsletters/send?id=...`.
-- **Cron diário**: `GET /api/cron/daily` com header `x-cron-secret`.
+- Login: `/login`
+- Dashboard: `/dashboard`
+- Destinatários: `/recipients`
+- Histórico: `/newsletters`
+- Preview: `/newsletters/[id]`
+- Rodar agora: botão no dashboard (`POST /api/newsletters/run`)
+- Enviar agora: página de detalhe (`POST /api/newsletters/send?id=...`)
+- Agendado: `GET /api/cron/daily` com header `x-cron-secret`
 
-## Configuração dos providers
+## Observações
 
-- `AI_PROVIDER=mock|openai`
-- `NEWS_PROVIDER=mock|rss`
-- `EMAIL_PROVIDER=mock|resend`
-
-## Segurança
-
-- Rotas administrativas protegidas por cookie de sessão (`middleware.ts`).
-- Login com senha hash no banco.
-- Segredos apenas no backend (`.env`).
-
-## Deploy sugerido
-
-- **Vercel** para app Next.js.
-- **PostgreSQL gerenciado** (Neon/Supabase/RDS).
-- Cron via **Vercel Cron** chamando `/api/cron/daily`.
-
-## Pontos mockados no MVP
-
-- Provider real de notícias ainda simplificado (`RSSNewsProvider` inicial).
-- Alguns testes de API são smoke tests para garantir wiring básico.
-
-## Próximos passos recomendados
-
-1. Adicionar edição/ativação/desativação/exclusão de destinatários na UI.
-2. Expandir ingestão real (NewsAPI, GDELT, feeds financeiros múltiplos).
-3. Criar observabilidade com tracing e métricas.
-4. Implementar retries com backoff para envio e IA.
-5. Adicionar teste de integração com banco efêmero para rotas.
+- Provider de notícias real ainda está em scaffold (`RSSNewsProvider`).
+- Em ambiente sem internet corporativa, `npm install` pode falhar por política de rede; nesse caso libere acesso ao registry interno/externo.
