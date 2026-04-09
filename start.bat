@@ -21,8 +21,7 @@ set "PATH=%RUNTIME_DIR%;%PATH%"
 
 if not exist "%ENV_FILE%" (
   echo [INFO] Criando .env padrao...
-  >"%ENV_FILE%" echo DATABASE_URL="sqlite:./dev.db"
-  >>"%ENV_FILE%" echo DATABASE_URL_PRISMA="file:./dev.db"
+  >"%ENV_FILE%" echo DATABASE_URL="file:./dev.db"
   >>"%ENV_FILE%" echo OPENAI_API_KEY=""
   >>"%ENV_FILE%" echo OPENAI_MODEL="gpt-4.1-mini"
   >>"%ENV_FILE%" echo AI_PROVIDER="mock"
@@ -31,7 +30,7 @@ if not exist "%ENV_FILE%" (
   >>"%ENV_FILE%" echo EMAIL_PROVIDER="mock"
   >>"%ENV_FILE%" echo RESEND_API_KEY=""
   >>"%ENV_FILE%" echo EMAIL_FROM="Global Market Morning Brief ^<brief@local^>"
-  >>"%ENV_FILE%" echo ADMIN_EMAIL="admin@local"
+  >>"%ENV_FILE%" echo ADMIN_EMAIL="admin@example.com"
   >>"%ENV_FILE%" echo ADMIN_PASSWORD="admin123"
   >>"%ENV_FILE%" echo CRON_SECRET="local-secret"
   >>"%ENV_FILE%" echo APP_BASE_URL="http://localhost:3000"
@@ -52,15 +51,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [INFO] Aplicando migrations SQLite...
-call "%NPX_CMD%" prisma migrate dev --name init --skip-seed
+echo [INFO] Aplicando schema SQLite (db push)...
+call "%NPX_CMD%" prisma db push
 if errorlevel 1 (
-  echo [ERRO] prisma migrate dev falhou.
+  echo [ERRO] prisma db push falhou.
   exit /b 1
 )
 
 echo [INFO] Abrindo dashboard...
-start "" "http://localhost:3000/dashboard"
+start "" "http://localhost:3000/login"
 
 echo [INFO] Iniciando servidor Next.js...
 call "%NPM_CMD%" run dev

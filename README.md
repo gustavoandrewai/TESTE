@@ -1,64 +1,50 @@
 # Global Market Morning Brief
 
-MVP full-stack (Next.js + Prisma) com execução **portátil para Windows corporativo sem Node global**.
+Projeto Next.js 14 + Prisma + SQLite com execução local em Windows corporativo usando Node portátil dentro do repositório.
 
-## Zero-config no Windows (sem admin)
+## Rodar local (sem Node global)
 
-1. Clone ou extraia o projeto.
-2. Dê duplo clique em **`start.bat`**.
-3. O script faz automaticamente:
-   - valida/download do Node portátil em `runtime/node`
-   - criação de `.env` padrão (se não existir)
+1. Clique em `start.bat`.
+2. O script executa automaticamente:
+   - `setup.bat` (se `runtime/node` não existir)
+   - cria `.env` local (se não existir)
    - `npm install`
    - `prisma generate`
-   - `prisma migrate dev`
+   - `prisma db push`
    - `npm run dev`
-4. O navegador abre em: `http://localhost:3000/dashboard`
+3. Abra `http://localhost:3000/login`.
 
-> Sem instalação global de Node/npm/npx.
+Credenciais padrão:
+- `admin@example.com`
+- `admin123`
 
-## Scripts portáteis
+## Ambiente local (SQLite)
 
-- `setup.bat`: baixa e extrai Node oficial (`zip`) para `runtime/node`.
-- `start.bat`: bootstrap completo + start da aplicação.
+Use `.env` com:
 
-## Ambiente local padrão
+```env
+DATABASE_URL="file:./dev.db"
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASSWORD="admin123"
+AI_PROVIDER="mock"
+NEWS_PROVIDER="mock"
+EMAIL_PROVIDER="mock"
+APP_BASE_URL="http://localhost:3000"
+```
 
-`.env` automático (quando ausente):
+## Fluxo funcional
 
-- `DATABASE_URL="sqlite:./dev.db"`
-- `DATABASE_URL_PRISMA="file:./dev.db"`
-- `ADMIN_EMAIL="admin@local"`
-- `ADMIN_PASSWORD="admin123"`
-- demais variáveis com defaults seguros para dev.
+- Login em `/login`
+- Dashboard em `/dashboard`
+- Recipients em `/recipients` (listar/criar/editar/ativar/desativar/excluir)
+- Settings em `/settings`
+- Geração manual via botão **Rodar agora**
+- Preview e envio manual mock em `/newsletters/[id]`
 
-## Banco de dados
+## Modo mock
 
-- Prisma configurado com **SQLite** por padrão.
-- Arquivo local: `dev.db` na raiz do projeto.
-- Não requer PostgreSQL para rodar local.
+- News provider: mock
+- AI provider: mock
+- Email provider: mock
 
-## Stack
-
-- Next.js App Router + TypeScript
-- Prisma ORM
-- Tailwind CSS
-- Zod
-- OpenAI Responses API (opcional, via `AI_PROVIDER=openai`)
-- Resend (opcional, via `EMAIL_PROVIDER=resend`)
-
-## Fluxos principais
-
-- Login: `/login`
-- Dashboard: `/dashboard`
-- Destinatários: `/recipients`
-- Histórico: `/newsletters`
-- Preview: `/newsletters/[id]`
-- Rodar agora: botão no dashboard (`POST /api/newsletters/run`)
-- Enviar agora: página de detalhe (`POST /api/newsletters/send?id=...`)
-- Agendado: `GET /api/cron/daily` com header `x-cron-secret`
-
-## Observações
-
-- Provider de notícias real ainda está em scaffold (`RSSNewsProvider`).
-- Em ambiente sem internet corporativa, `npm install` pode falhar por política de rede; nesse caso libere acesso ao registry interno/externo.
+Sem chave externa, o fluxo ponta-a-ponta local continua funcionando.
