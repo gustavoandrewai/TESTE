@@ -41,8 +41,20 @@ class PipelineResult:
     tickers_processed: list[str]
 
 
-def normalize_sector_name(value: str | None) -> str:
-    raw = (value or "outros").strip().lower()
+def normalize_sector_name(value: object) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "outros"
+    except Exception:
+        return "outros"
+
+    if not isinstance(value, str):
+        return "outros"
+
+    raw = value.strip().lower()
+    if not raw:
+        return "outros"
+
     raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
     raw = re.sub(r"\s+", "_", raw)
     aliases = {
@@ -137,6 +149,8 @@ class DailyPipeline:
         self.tickers_failed: dict[str, str] = dict(parsing_errors)
         self.tickers_processed: list[str] = []
         self.override_count: int = 0
+        self.invalid_sector_count: int = 0
+        self.setor_outros_count: int = 0
 
     def ensure_required_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
@@ -181,7 +195,24 @@ class DailyPipeline:
             universe["subsetor"] = universe["subsetor_override"].combine_first(universe["subsetor"])
             universe = universe.drop(columns=["setor_override", "subsetor_override"])
 
-        universe["setor"] = universe["setor"].apply(normalize_sector_name)
+        if "setor" not in universe.columns:
+            universe["setor"] = "outros"
+            self.invalid_sector_count += len(universe)
+        else:
+            raw_setor = universe["setor"].copy()
+            self.invalid_sector_count += int(
+                raw_setor.apply(lambda v: (v is None) or pd.isna(v) or (isinstance(v, str) and not v.strip()) or (not isinstance(v, str))).sum()
+            )
+
+        def _safe_normalize_sector(v: object) -> str:
+            try:
+                return normalize_sector_name(v)
+            except Exception:
+                self.invalid_sector_count += 1
+                return "outros"
+
+        universe["setor"] = universe["setor"].apply(_safe_normalize_sector)
+        self.setor_outros_count = int((universe["setor"] == "outros").sum())
         universe["subsetor"] = universe["subsetor"].fillna("na")
 
         market_df, market_failures = self.collect_market_data(self.tickers_valid, universe)
@@ -365,6 +396,8 @@ class DailyPipeline:
             "failed_count": len(self.tickers_failed),
             "mapped_count": int((ranking["setor"] != "outros").sum()),
             "outros_count": int((ranking["setor"] == "outros").sum()),
+            "invalid_sector_count": int(self.invalid_sector_count),
+            "setor_outros_count": int(self.setor_outros_count),
             "override_count": self.override_count,
             "outros_tickers": ranking.loc[ranking["setor"] == "outros", "ticker"].tolist(),
             "tickers_received": received,
