@@ -1,174 +1,64 @@
-# FII Asymmetry Analyzer
+# Global Market Morning Brief
 
-Projeto didático em Python para analisar FIIs diariamente, com **P/VP como benchmark dominante** para geração de ranking de oportunidades.
+MVP full-stack (Next.js + Prisma) com execução **portátil para Windows corporativo sem Node global**.
 
-## Arquitetura
-- **FastAPI** para endpoints.
-- **PostgreSQL + SQLAlchemy** para persistência.
-- **Alembic** para migrations.
-- **Pandas** para cálculos quantitativos.
-- **APScheduler** para rotina automática opcional.
-- **Providers desacoplados** (`app/ingestion/providers.py`) com `MockFIIProvider` pronto para troca por fonte real.
-- **Yahoo Finance opcional** com `YahooFIIProvider` para ingestão de preços quando `DATA_PROVIDER=yahoo`.
+## Zero-config no Windows (sem admin)
 
-## Estrutura
-```text
-app/
-  api/
-  core/
-  ingestion/
-  jobs/
-  models/
-  repositories/
-  schemas/
-  scoring/
-  services/
-alembic/
-tests/
-```
+1. Clone ou extraia o projeto.
+2. Dê duplo clique em **`start.bat`**.
+3. O script faz automaticamente:
+   - valida/download do Node portátil em `runtime/node`
+   - criação de `.env` padrão (se não existir)
+   - `npm install`
+   - `prisma generate`
+   - `prisma migrate dev`
+   - `npm run dev`
+4. O navegador abre em: `http://localhost:3000/dashboard`
 
-## Modelo de score (0-100)
-Pesos em `app/scoring/model.py`:
-- 45% valuation por P/VP
-- 20% fundamentos
-- 15% estabilidade/renda
-- 10% risco e liquidez
-- 10% relativo vs benchmark
+> Sem instalação global de Node/npm/npx.
 
-### Bloco P/VP
-Implementa:
-- mediana e percentis setoriais;
-- desvio percentual vs mediana;
-- z-score histórico;
-- winsorização (5%-95%);
-- normalização 0-100;
-- penalização por deterioração fundamentalista.
+## Scripts portáteis
 
-## Como rodar local
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload
-```
+- `setup.bat`: baixa e extrai Node oficial (`zip`) para `runtime/node`.
+- `start.bat`: bootstrap completo + start da aplicação.
 
-## Com Docker
-```bash
-docker compose up --build
-```
+## Ambiente local padrão
 
-## Migrations
-```bash
-alembic upgrade head
-```
+`.env` automático (quando ausente):
 
-## Rodar job diário manualmente
-```bash
-curl -X POST http://localhost:8000/jobs/run-daily
-```
+- `DATABASE_URL="sqlite:./dev.db"`
+- `DATABASE_URL_PRISMA="file:./dev.db"`
+- `ADMIN_EMAIL="admin@local"`
+- `ADMIN_PASSWORD="admin123"`
+- demais variáveis com defaults seguros para dev.
 
-## Usando dados do Yahoo Finance no pipeline
-1. Defina `DATA_PROVIDER=yahoo` no `.env`.
-2. Execute o job diário (`POST /jobs/run-daily`).
-3. O pipeline buscará cotações via `yfinance` e recalculará o ranking.
+## Banco de dados
 
-## Endpoints principais
-- `GET /health`
-- `GET /fiis`
-- `GET /fiis/{ticker}`
-- `GET /rankings/daily`
-- `GET /rankings/by-sector`
-- `GET /rankings/value-traps`
-- `GET /benchmarks`
-- `POST /jobs/run-daily`
-- `GET /jobs/status`
+- Prisma configurado com **SQLite** por padrão.
+- Arquivo local: `dev.db` na raiz do projeto.
+- Não requer PostgreSQL para rodar local.
 
-### Exemplos
-```bash
-curl 'http://localhost:8000/fiis?page=1&page_size=10&sector=logistica&only_ifix=true'
-curl 'http://localhost:8000/rankings/daily?page=1&page_size=20'
-curl 'http://localhost:8000/rankings/value-traps'
-```
+## Stack
 
-Resposta exemplo (`/rankings/daily`):
-```json
-{
-  "total": 3,
-  "page": 1,
-  "page_size": 20,
-  "items": [
-    {
-      "ticker": "HGLG11",
-      "reference_date": "2026-04-07",
-      "pvp_score": 74.2,
-      "fundamental_score": 83.5,
-      "income_quality_score": 72.0,
-      "risk_liquidity_score": 68.9,
-      "relative_score": 54.0,
-      "total_score": 73.3,
-      "classification": "assimetria_positiva"
-    }
-  ]
-}
-```
+- Next.js App Router + TypeScript
+- Prisma ORM
+- Tailwind CSS
+- Zod
+- OpenAI Responses API (opcional, via `AI_PROVIDER=openai`)
+- Resend (opcional, via `EMAIL_PROVIDER=resend`)
 
-## Configuração
-- **Pesos**: `WEIGHTS` em `app/scoring/model.py`.
-- **Taxonomia setorial**: `sector_taxonomy` + provider (`app/ingestion/providers.py`).
-- **Classificação** (`assimetria_positiva`, `neutro`, `value_trap`): `classify_opportunity`.
-- **Fonte de dados**: `DATA_PROVIDER` (`mock` ou `yahoo`) em `.env`.
+## Fluxos principais
 
-## Dashboard com atualização manual do Yahoo
-O `streamlit_app.py` possui a aba **FIIs Yahoo**, com botão **“🔄 Atualizar dados do Yahoo Finance”** para forçar refresh dos preços conforme o tempo passa.
-Além do refresh, a aba traz uma visão mais profissional com:
-- KPIs de destaque (top retorno, preço médio, volatilidade média e liquidez média);
-- gráfico comparativo de retorno 1m vs 3m;
-- tabela formatada para leitura executiva;
-- exportação do snapshot para CSV.
+- Login: `/login`
+- Dashboard: `/dashboard`
+- Destinatários: `/recipients`
+- Histórico: `/newsletters`
+- Preview: `/newsletters/[id]`
+- Rodar agora: botão no dashboard (`POST /api/newsletters/run`)
+- Enviar agora: página de detalhe (`POST /api/newsletters/send?id=...`)
+- Agendado: `GET /api/cron/daily` com header `x-cron-secret`
 
-## Decisões de arquitetura (resumo)
-1. Separação em camadas (`ingestion`, `services`, `repositories`, `api`) para facilitar evolução.
-2. P/VP domina o score com bloco matemático explícito e auditável.
-3. Provider abstrato para permitir integração gradual com fontes oficiais sem quebrar API.
-4. Pipeline diário transacional com registro em `job_runs`.
+## Observações
 
-## Dashboard profissional (Yahoo + API)
-Execute:
-```bash
-streamlit run fii_dashboard.py
-```
-
-Recursos:
-- botão **🔄 Atualizar Yahoo** para refresh manual imediato dos preços;
-- botão **▶️ Rodar job diário** para acionar a API e recalcular o ranking;
-- cards explícitos com a distribuição obrigatória dos pesos (**45/20/15/10/10**);
-- decomposição visual do score por componente (contribuições ponderadas);
-- painel setorial com score médio e líder por setor;
-- KPIs e explicação didática para leitura executiva.
-
-## Execução rápida (modo simples solicitado)
-```bash
-python -m uvicorn routes:app --reload
-python -m streamlit run fii_dashboard.py
-```
-
-Nesse modo, `POST /jobs/run-daily` gera `ranking.csv` na raiz e `GET /rankings/daily` retorna JSON paginado baseado nesse arquivo.
-
-
-### Comportamento do job dinâmico por ticker
-- O dashboard envia os tickers digitados para `POST /jobs/run-daily?tickers=...`.
-- A API executa `daily_pipeline.py` via subprocess e sobrescreve `ranking.csv` em cada execução.
-- O endpoint `GET /rankings/daily` sempre lê o arquivo mais recente.
-- O status do último job fica em `job_status.json` (`status`, `tickers`, `last_run_utc`, `processed_count`).
-
-
-## CSVs locais usados no modo simples
-- `fundamentals_mock.csv`: taxonomia setorial + fundamentos por ticker (`setor`, `subsetor`, `pvp`, `dy_12m`, `vacancia`, `inadimplencia`, `alavancagem`, `liquidez_media`, `estabilidade_rendimentos`).
-- `ranking.csv`: ranking diário completo com benchmarks de mercado + fundamentalistas + scores por bloco.
-- `top_by_sector.csv`: Top 5 por setor gerado a cada job.
-- `job_status.json`: status da última execução.
-
-Rotas extras no modo simples:
-- `GET /`
-- `GET /rankings/top-by-sector`
+- Provider de notícias real ainda está em scaffold (`RSSNewsProvider`).
+- Em ambiente sem internet corporativa, `npm install` pode falhar por política de rede; nesse caso libere acesso ao registry interno/externo.

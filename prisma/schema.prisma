@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL_PRISMA")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Recipient {
+  id          String        @id @default(cuid())
+  name        String
+  email       String        @unique
+  active      Boolean       @default(true)
+  tags        String        @default("[]")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deliveryLog DeliveryLog[]
+}
+
+model Newsletter {
+  id           String           @id @default(cuid())
+  subject      String
+  slug         String?          @unique
+  htmlContent  String
+  textContent  String
+  status       String           @default("DRAFT")
+  runType      String
+  scheduledFor DateTime?
+  generatedAt  DateTime         @default(now())
+  sentAt       DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  items        NewsletterItem[]
+  deliveryLogs DeliveryLog[]
+}
+
+model NewsletterItem {
+  id             String     @id @default(cuid())
+  newsletterId   String
+  section        String
+  title          String
+  summary        String
+  sourceName     String
+  sourceUrl      String
+  publishedAt    DateTime
+  relevanceScore Float
+  rawData        String?
+  createdAt      DateTime   @default(now())
+  newsletter     Newsletter @relation(fields: [newsletterId], references: [id], onDelete: Cascade)
+}
+
+model DeliveryLog {
+  id                String     @id @default(cuid())
+  newsletterId      String
+  recipientId       String
+  provider          String
+  status            String
+  providerMessageId String?
+  errorMessage      String?
+  sentAt            DateTime?
+  createdAt         DateTime   @default(now())
+  newsletter        Newsletter @relation(fields: [newsletterId], references: [id], onDelete: Cascade)
+  recipient         Recipient  @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+}
+
+model RunLog {
+  id           String    @id @default(cuid())
+  jobType      String
+  status       String
+  startedAt    DateTime
+  finishedAt   DateTime?
+  durationMs   Int?
+  errorMessage String?
+  metadata     String?
+  createdAt    DateTime  @default(now())
+}
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
