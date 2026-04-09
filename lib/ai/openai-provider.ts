@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { newsletterDraftSchema } from "@/lib/validation/schemas";
+import { sanitizeDraft } from "./sanitize-draft";
 import type { AIProvider, EditorialDraft, EditorialInput } from "./types";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -21,6 +22,9 @@ export class OpenAIProvider implements AIProvider {
     });
 
     const raw = response.output_text || "{}";
-    return newsletterDraftSchema.parse(JSON.parse(raw));
+    const parsed = JSON.parse(raw) as Partial<EditorialDraft>;
+    const sanitized = sanitizeDraft(parsed, input);
+
+    return newsletterDraftSchema.parse(sanitized);
   }
 }
