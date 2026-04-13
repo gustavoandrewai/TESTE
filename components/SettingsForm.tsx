@@ -31,7 +31,8 @@ export function SettingsForm({ initialSettings }: { initialSettings: Setting[] }
         return;
       }
 
-      setMessage("Configurações salvas com sucesso.");
+      const extra = json.emailStatus ? ` | envio=${json.emailStatus.sendMode}, provider=${json.emailStatus.provider}, live=${json.emailStatus.validForLive ? "ok" : "inválido"}` : "";
+      setMessage(`Configurações salvas com sucesso.${extra}`);
     } catch {
       setMessage("Erro de conexão ao salvar configurações.");
     } finally {

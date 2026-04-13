@@ -1,8 +1,11 @@
 import { MockAIProvider } from "@/lib/ai/mock-provider";
 import { OpenAIProvider } from "@/lib/ai/openai-provider";
 import { prisma } from "@/lib/db/prisma";
+import { getEmailRuntimeConfig } from "@/lib/email/mode";
 import { MockEmailProvider } from "@/lib/email/mock-provider";
 import { ResendProvider } from "@/lib/email/resend-provider";
+import { SendGridProvider } from "@/lib/email/sendgrid-provider";
+import type { EmailProvider } from "@/lib/email/types";
 import { deduplicateNews } from "@/lib/news/deduplication";
 import { MockNewsProvider } from "@/lib/news/mock-provider";
 import { normalizeNews } from "@/lib/news/normalization";
@@ -20,8 +23,10 @@ function selectAIProvider() {
   return process.env.AI_PROVIDER === "openai" ? new OpenAIProvider() : new MockAIProvider();
 }
 
-function selectEmailProvider() {
-  return process.env.EMAIL_PROVIDER === "resend" ? new ResendProvider() : new MockEmailProvider();
+function selectProviderByName(name: "mock" | "resend" | "sendgrid"): EmailProvider {
+  if (name === "resend") return new ResendProvider();
+  if (name === "sendgrid") return new SendGridProvider();
+  return new MockEmailProvider();
 }
 
 export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "MANUAL") {
@@ -29,10 +34,13 @@ export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "M
   const runLog = await prisma.runLog.create({ data: { jobType: "newsletter_pipeline", status: "RUNNING", startedAt } });
 
   try {
+    const maxItemsSetting = await prisma.appSetting.findUnique({ where: { key: "MAX_ITEMS" } });
+    const maxItems = Number(maxItemsSetting?.value || "15");
+
     const raw = await selectNewsProvider().fetchLatestNews();
     const normalized = normalizeNews(raw);
     const deduped = deduplicateNews(normalized);
-    const ranked = rankNews(deduped).slice(0, 15);
+    const ranked = rankNews(deduped).slice(0, Number.isNaN(maxItems) ? 15 : maxItems);
 
     if (!ranked.length) throw new Error("Nenhuma notícia relevante encontrada.");
 
@@ -64,7 +72,12 @@ export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "M
 
     await prisma.runLog.update({
       where: { id: runLog.id },
-      data: { status: "SUCCESS", finishedAt: new Date(), durationMs: Date.now() - startedAt.getTime() }
+      data: {
+        status: "SUCCESS",
+        finishedAt: new Date(),
+        durationMs: Date.now() - startedAt.getTime(),
+        metadata: JSON.stringify({ items: ranked.length, subject: draft.subject })
+      }
     });
 
     return newsletter;
@@ -89,7 +102,17 @@ export async function sendNewsletter(newsletterId: string) {
   const recipients = await prisma.recipient.findMany({ where: { active: true } });
   if (!recipients.length) throw new Error("Sem destinatários ativos");
 
-  const provider = selectEmailProvider();
+  const emailConfig = await getEmailRuntimeConfig();
+  if (emailConfig.sendMode === "live" && !emailConfig.validForLive) {
+    throw new Error(`Configuração de envio inválida: ${emailConfig.reasons.join("; ")}`);
+  }
+
+  const isMockFlow = emailConfig.sendMode === "mock" || emailConfig.previewMode;
+  const provider = isMockFlow ? new MockEmailProvider() : selectProviderByName(emailConfig.provider);
+
+  let sent = 0;
+  let failed = 0;
+  const failures: Array<{ recipient: string; reason: string }> = [];
 
   for (const recipient of recipients) {
     try {
@@ -100,28 +123,43 @@ export async function sendNewsletter(newsletterId: string) {
         text: newsletter.textContent
       });
 
+      sent += 1;
       await prisma.deliveryLog.create({
         data: {
           newsletterId,
           recipientId: recipient.id,
           provider: provider.name,
-          status: "sent",
+          status: isMockFlow ? "mock_sent" : "sent",
           providerMessageId: result.messageId,
-          sentAt: new Date()
+          sentAt: new Date(),
+          errorMessage: isMockFlow ? "Simulação de envio (mock/preview)" : null
         }
       });
     } catch (error) {
+      failed += 1;
+      const reason = error instanceof Error ? error.message : "Erro desconhecido";
+      failures.push({ recipient: recipient.email, reason });
+
       await prisma.deliveryLog.create({
         data: {
           newsletterId,
           recipientId: recipient.id,
           provider: provider.name,
           status: "failed",
-          errorMessage: error instanceof Error ? error.message : "Erro desconhecido"
+          errorMessage: reason
         }
       });
     }
   }
 
-  await prisma.newsletter.update({ where: { id: newsletterId }, data: { status: "SENT", sentAt: new Date() } });
+  await prisma.newsletter.update({ where: { id: newsletterId }, data: { status: failed ? "FAILED" : "SENT", sentAt: new Date() } });
+
+  return {
+    provider: provider.name,
+    mode: isMockFlow ? "mock" : "live",
+    previewMode: emailConfig.previewMode,
+    sent,
+    failed,
+    failures
+  };
 }

@@ -16,11 +16,22 @@ async function main() {
     }
   });
 
-  await prisma.appSetting.upsert({
-    where: { key: "send_time" },
-    update: { value: "08:00" },
-    create: { key: "send_time", value: "08:00" }
-  });
+  const defaults: Record<string, string> = {
+    SEND_MODE: process.env.SEND_MODE || "mock",
+    PREVIEW_MODE: process.env.PREVIEW_MODE || "true",
+    EMAIL_PROVIDER: process.env.EMAIL_PROVIDER || "mock",
+    EMAIL_PROVIDER_STATUS: "pending",
+    MAX_ITEMS: "15",
+    ENABLE_CHARTS: "true",
+    ENABLE_IMAGES: "true",
+    ENABLE_MARKET_SNAPSHOT: "true"
+  };
+
+  await Promise.all(
+    Object.entries(defaults).map(([key, value]) =>
+      prisma.appSetting.upsert({ where: { key }, update: { value }, create: { key, value } })
+    )
+  );
 }
 
 main().finally(async () => {

@@ -1,50 +1,59 @@
 # Global Market Morning Brief
 
-Projeto Next.js 14 + Prisma + SQLite com execução local em Windows corporativo usando Node portátil dentro do repositório.
+Newsletter premium de mercados globais em Next.js 14 + Prisma (SQLite local), com modos `mock` e `live` para envio real.
 
-## Rodar local (sem Node global)
-
-1. Clique em `start.bat`.
-2. O script executa automaticamente:
-   - `setup.bat` (se `runtime/node` não existir)
-   - cria `.env` local (se não existir)
+## Start local (Windows sem Node global)
+1. Execute `start.bat`.
+2. Script faz:
+   - setup de Node portátil (`runtime/node`)
+   - `.env` automático
    - `npm install`
    - `prisma generate`
    - `prisma db push`
    - `npm run dev`
-3. Abra `http://localhost:3000/login`.
+3. Acesse `http://localhost:3000/login`.
 
-Credenciais padrão:
-- `admin@example.com`
-- `admin123`
-
-## Ambiente local (SQLite)
-
-Use `.env` com:
-
+## Variáveis de ambiente
 ```env
 DATABASE_URL="file:./dev.db"
 ADMIN_EMAIL="admin@example.com"
 ADMIN_PASSWORD="admin123"
-AI_PROVIDER="mock"
-NEWS_PROVIDER="mock"
-EMAIL_PROVIDER="mock"
-APP_BASE_URL="http://localhost:3000"
+AI_PROVIDER="mock"        # mock | openai
+NEWS_PROVIDER="mock"      # mock | rss
+EMAIL_PROVIDER="mock"     # mock | resend | sendgrid
+SEND_MODE="mock"          # mock | live
+PREVIEW_MODE="true"       # true bloqueia envio real
+EMAIL_FROM="Global Market Morning Brief <brief@local>"
+RESEND_API_KEY=""
+SENDGRID_API_KEY=""
+OPENAI_API_KEY=""
 ```
 
-## Fluxo funcional
+## Envio real de email
+Para live real:
+1. `SEND_MODE=live`
+2. `PREVIEW_MODE=false`
+3. `EMAIL_PROVIDER=resend` (ou `sendgrid`)
+4. Configurar API key (`RESEND_API_KEY` ou `SENDGRID_API_KEY`)
+5. Configurar `EMAIL_FROM` válido
 
-- Login em `/login`
-- Dashboard em `/dashboard`
-- Recipients em `/recipients` (listar/criar/editar/ativar/desativar/excluir)
-- Settings em `/settings`
-- Geração manual via botão **Rodar agora**
-- Preview e envio manual mock em `/newsletters/[id]`
+Se houver configuração inválida, o envio retorna erro amigável e logs por destinatário.
 
-## Modo mock
+## Estrutura editorial (premium)
+A newsletter gerada inclui:
+- Top Takeaways executivos
+- Macro e Bancos Centrais
+- Mercados Globais
+- Política e Geopolítica
+- Commodities/Moedas/Rates
+- Market Snapshot
+- Charts mock embutidos (data URI SVG)
+- Tabelas de performance
+- Agenda do dia
+- Conclusão editorial
 
-- News provider: mock
-- AI provider: mock
-- Email provider: mock
-
-Sem chave externa, o fluxo ponta-a-ponta local continua funcionando.
+## O que fica mockado no modo local
+- News feed mock
+- AI mock (opcional trocar para OpenAI)
+- Email mock (se `SEND_MODE=mock` ou `PREVIEW_MODE=true`)
+- Charts com dados mock

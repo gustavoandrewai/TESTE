@@ -17,8 +17,11 @@ export function SendNewsletterButton({ newsletterId }: { newsletterId: string })
         setMessage(data.error || "Falha ao enviar newsletter");
         return;
       }
-      setMessage("Envio realizado com sucesso (mock/real). ");
-      setTimeout(() => window.location.reload(), 600);
+
+      const summary = data.summary;
+      const label = summary.mode === "live" ? "Envio real" : "Simulação";
+      setMessage(`${label}: ${summary.sent} enviados, ${summary.failed} falhas. Provider: ${summary.provider}.`);
+      setTimeout(() => window.location.reload(), 1000);
     } catch {
       setMessage("Erro inesperado no envio");
     } finally {
