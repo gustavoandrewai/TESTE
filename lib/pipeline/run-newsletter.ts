@@ -103,12 +103,32 @@ export async function sendNewsletter(newsletterId: string) {
   if (!recipients.length) throw new Error("Sem destinatários ativos");
 
   const emailConfig = await getEmailRuntimeConfig();
-  if (emailConfig.sendMode === "live" && !emailConfig.validForLive) {
-    throw new Error(`Configuração de envio inválida: ${emailConfig.reasons.join("; ")}`);
+  const provider = selectProviderByName(emailConfig.provider);
+
+  const configReasons: string[] = [];
+  if (emailConfig.provider !== "mock") {
+    if (emailConfig.sendMode !== "live") configReasons.push("SEND_MODE precisa ser live para provider real");
+    if (emailConfig.previewMode) configReasons.push("PREVIEW_MODE=true bloqueia envio real");
+    if (!emailConfig.validForLive) configReasons.push(...emailConfig.reasons);
   }
 
-  const isMockFlow = emailConfig.sendMode === "mock" || emailConfig.previewMode;
-  const provider = isMockFlow ? new MockEmailProvider() : selectProviderByName(emailConfig.provider);
+  if (configReasons.length) {
+    await Promise.all(
+      recipients.map((recipient) =>
+        prisma.deliveryLog.create({
+          data: {
+            newsletterId,
+            recipientId: recipient.id,
+            provider: emailConfig.provider,
+            status: "config_error",
+            errorMessage: configReasons.join("; ")
+          }
+        })
+      )
+    );
+
+    throw new Error(`Configuração de envio inválida: ${configReasons.join("; ")}`);
+  }
 
   let sent = 0;
   let failed = 0;
@@ -129,10 +149,10 @@ export async function sendNewsletter(newsletterId: string) {
           newsletterId,
           recipientId: recipient.id,
           provider: provider.name,
-          status: isMockFlow ? "mock_sent" : "sent",
+          status: provider.name === "mock" ? "mock_sent" : "sent",
           providerMessageId: result.messageId,
           sentAt: new Date(),
-          errorMessage: isMockFlow ? "Simulação de envio (mock/preview)" : null
+          errorMessage: provider.name === "mock" ? "Simulação de envio (provider mock)" : null
         }
       });
     } catch (error) {
@@ -156,7 +176,7 @@ export async function sendNewsletter(newsletterId: string) {
 
   return {
     provider: provider.name,
-    mode: isMockFlow ? "mock" : "live",
+    mode: provider.name === "mock" ? "mock" : "live",
     previewMode: emailConfig.previewMode,
     sent,
     failed,
