@@ -1,0 +1,6 @@
+Com base nos itens deduplicados e ranqueados, gere JSON com:
+- subject
+- executiveSummary (5 bullets)
+- sections
+- monitorToday
+- agenda
