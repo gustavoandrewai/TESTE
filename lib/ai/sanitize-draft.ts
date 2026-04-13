@@ -10,7 +10,7 @@ const fallbackExecutiveSummary = [
 const fallbackMonitor = [
   "Comunicações de bancos centrais e autoridades fiscais com potencial de ajuste de expectativas.",
   "Dinâmica de yields longas, spreads de crédito e comportamento do dólar global.",
-  "Movimento de commodities energéticas e metálicas em contexto geopolítico." 
+  "Movimento de commodities energéticas e metálicas em contexto geopolítico."
 ];
 
 const fallbackAgenda = [
@@ -26,6 +26,15 @@ const defaultSections = [
   "Commodities, Moedas e Rates"
 ];
 
+const fallbackSectionItem = {
+  title: "Mercados monitoram sinais de política monetária e atividade global",
+  summary:
+    "Investidores seguem atentos a dados macroeconômicos, trajetória de juros e riscos geopolíticos, com impacto direto sobre sentimento e precificação de ativos.",
+  whyItMatters: "Importa por influenciar prêmio de risco, curvas de juros, dólar e alocação entre classes de ativos.",
+  sourceName: "Editorial fallback",
+  sourceUrl: "https://example.com/editorial-fallback"
+};
+
 function uniqueNonEmpty(items: unknown[]): string[] {
   return items
     .map((item) => String(item ?? "").trim())
@@ -37,6 +46,72 @@ function chunk<T>(arr: T[], size: number) {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+type SectionItem = {
+  title: string;
+  summary: string;
+  whyItMatters: string;
+  sourceName: string;
+  sourceUrl: string;
+};
+
+function sanitizeSectionItems(items: unknown[]): SectionItem[] {
+  const normalized = (items || [])
+    .map((entry) => (typeof entry === "object" && entry !== null ? (entry as Partial<SectionItem>) : null))
+    .filter(Boolean)
+    .map((entry) => ({
+      title: String(entry?.title || "").trim(),
+      summary: String(entry?.summary || "").trim(),
+      whyItMatters: String(entry?.whyItMatters || "").trim(),
+      sourceName: String(entry?.sourceName || "").trim(),
+      sourceUrl: String(entry?.sourceUrl || "").trim()
+    }))
+    .filter((item) => item.title && item.summary && item.whyItMatters && item.sourceName && /^https?:\/\//.test(item.sourceUrl));
+
+  const deduped = normalized.filter(
+    (item, idx, arr) => arr.findIndex((x) => `${x.title}|${x.sourceUrl}` === `${item.title}|${item.sourceUrl}`) === idx
+  );
+
+  return deduped;
+}
+
+function sanitizeSections(candidateSections: unknown, autoSections: Array<{ section: string; items: SectionItem[] }>) {
+  const candidate = Array.isArray(candidateSections)
+    ? candidateSections
+        .map((section) => (typeof section === "object" && section !== null ? section : null))
+        .filter(Boolean)
+        .map((section) => {
+          const raw = section as { section?: string; items?: unknown[] };
+          const sectionTitle = String(raw.section || "").trim();
+          const items = sanitizeSectionItems(Array.isArray(raw.items) ? raw.items : []);
+          return sectionTitle ? { section: sectionTitle, items } : null;
+        })
+        .filter(Boolean)
+    : [];
+
+  const nonEmpty = candidate
+    .map((section) => {
+      const safeItems = section!.items.length ? section!.items : [fallbackSectionItem];
+      return { section: section!.section, items: safeItems };
+    })
+    .filter((section) => section.items.length > 0);
+
+  const baseSections = nonEmpty.length ? nonEmpty : autoSections;
+
+  const completed = baseSections.map((section) => ({
+    section: section.section,
+    items: section.items.length ? section.items : [fallbackSectionItem]
+  }));
+
+  while (completed.length < 3) {
+    completed.push({
+      section: defaultSections[completed.length] || `Seção ${completed.length + 1}`,
+      items: [fallbackSectionItem]
+    });
+  }
+
+  return completed;
 }
 
 export function sanitizeDraft(candidate: Partial<EditorialDraft> | undefined, input: EditorialInput): Partial<EditorialDraft> {
@@ -59,22 +134,12 @@ export function sanitizeDraft(candidate: Partial<EditorialDraft> | undefined, in
     }))
   }));
 
-  const baseItem = autoSections[0]?.items[0] || {
-    title: "Panorama global",
-    summary: "Mercados seguem orientados por inflação, juros e risco geopolítico.",
-    whyItMatters: "Impacta prêmio de risco, curvas e alocação entre classes de ativos.",
-    sourceName: "MockWire",
-    sourceUrl: "https://example.com/fallback"
-  };
+  const safeAutoSections = autoSections.map((section) => ({
+    section: section.section,
+    items: section.items.length ? section.items : [fallbackSectionItem]
+  }));
 
-  while (autoSections.length < 3) {
-    autoSections.push({
-      section: defaultSections[autoSections.length] || `Seção ${autoSections.length + 1}`,
-      items: [baseItem]
-    });
-  }
-
-  const sections = Array.isArray(candidate?.sections) && candidate.sections.length >= 3 ? candidate.sections : autoSections;
+  const sections = sanitizeSections(candidate?.sections, safeAutoSections);
 
   return {
     subject: candidate?.subject?.trim() || "Global Market Morning Brief | Macro, política monetária e ativos no radar",
@@ -106,7 +171,13 @@ export function sanitizeDraft(candidate: Partial<EditorialDraft> | undefined, in
     charts: candidate?.charts?.length ? candidate.charts : generateMockCharts(),
     images: candidate?.images?.length
       ? candidate.images
-      : [{ title: "Mapa de risco geopolítico", url: "https://picsum.photos/960/420", caption: "Imagem ilustrativa para contexto macro/político." }],
+      : [
+          {
+            title: "Mapa de risco geopolítico",
+            url: "https://picsum.photos/960/420",
+            caption: "Imagem ilustrativa para contexto macro/político."
+          }
+        ],
     monitorToday: uniqueNonEmpty(Array.isArray(candidate?.monitorToday) ? candidate.monitorToday : fallbackMonitor).slice(0, 6),
     agenda: uniqueNonEmpty(Array.isArray(candidate?.agenda) ? candidate.agenda : fallbackAgenda).slice(0, 6),
     conclusion:

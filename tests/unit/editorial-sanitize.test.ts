@@ -6,7 +6,12 @@ describe("sanitizeDraft", () => {
     const result = sanitizeDraft(
       {
         subject: "Teste",
-        executiveSummary: ["item único"]
+        executiveSummary: ["item único"],
+        sections: [
+          { section: "Macro", items: [] },
+          { section: "Mercados", items: [] },
+          { section: "Política", items: [] }
+        ]
       },
       {
         news: [
@@ -23,6 +28,7 @@ describe("sanitizeDraft", () => {
     );
 
     expect((result.executiveSummary || []).length).toBeGreaterThanOrEqual(3);
-    expect(result.sections?.length).toBeGreaterThan(0);
+    expect(result.sections?.length).toBeGreaterThanOrEqual(3);
+    expect(result.sections?.every((section) => section.items.length >= 1)).toBeTruthy();
   });
 });
