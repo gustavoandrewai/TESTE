@@ -103,16 +103,33 @@ export async function sendNewsletter(newsletterId: string) {
   if (!recipients.length) throw new Error("Sem destinatários ativos");
 
   const emailConfig = await getEmailRuntimeConfig();
-  const provider = selectProviderByName(emailConfig.provider);
 
-  const configReasons: string[] = [];
-  if (emailConfig.provider !== "mock") {
-    if (emailConfig.sendMode !== "live") configReasons.push("SEND_MODE precisa ser live para provider real");
-    if (emailConfig.previewMode) configReasons.push("PREVIEW_MODE=true bloqueia envio real");
-    if (!emailConfig.validForLive) configReasons.push(...emailConfig.reasons);
+  // 1) Preview sempre bloqueia envio real/simulado
+  if (emailConfig.previewMode) {
+    await Promise.all(
+      recipients.map((recipient) =>
+        prisma.deliveryLog.create({
+          data: {
+            newsletterId,
+            recipientId: recipient.id,
+            provider: emailConfig.provider,
+            status: "blocked_preview",
+            errorMessage: "PREVIEW_MODE=true bloqueia qualquer envio"
+          }
+        })
+      )
+    );
+    throw new Error("Envio bloqueado: PREVIEW_MODE=true");
   }
 
-  if (configReasons.length) {
+  // 2) Modo mock explícito OU provider mock explícito
+  const shouldMockSend = emailConfig.sendMode === "mock" || emailConfig.provider === "mock";
+  const provider = shouldMockSend ? new MockEmailProvider() : selectProviderByName(emailConfig.provider);
+
+  // 3) Caminho live exige configuração válida (sem fallback silencioso)
+  if (!shouldMockSend && !emailConfig.validForLive) {
+    const reason = emailConfig.reasons.join("; ") || "Configuração de envio live inválida";
+
     await Promise.all(
       recipients.map((recipient) =>
         prisma.deliveryLog.create({
@@ -121,13 +138,13 @@ export async function sendNewsletter(newsletterId: string) {
             recipientId: recipient.id,
             provider: emailConfig.provider,
             status: "config_error",
-            errorMessage: configReasons.join("; ")
+            errorMessage: reason
           }
         })
       )
     );
 
-    throw new Error(`Configuração de envio inválida: ${configReasons.join("; ")}`);
+    throw new Error(`Configuração de envio inválida: ${reason}`);
   }
 
   let sent = 0;
@@ -149,10 +166,10 @@ export async function sendNewsletter(newsletterId: string) {
           newsletterId,
           recipientId: recipient.id,
           provider: provider.name,
-          status: provider.name === "mock" ? "mock_sent" : "sent",
+          status: shouldMockSend ? "mock_sent" : "sent",
           providerMessageId: result.messageId,
           sentAt: new Date(),
-          errorMessage: provider.name === "mock" ? "Simulação de envio (provider mock)" : null
+          errorMessage: shouldMockSend ? "Simulação de envio (modo/provider mock explícito)" : null
         }
       });
     } catch (error) {
@@ -176,7 +193,7 @@ export async function sendNewsletter(newsletterId: string) {
 
   return {
     provider: provider.name,
-    mode: provider.name === "mock" ? "mock" : "live",
+    mode: shouldMockSend ? "mock" : "live",
     previewMode: emailConfig.previewMode,
     sent,
     failed,
