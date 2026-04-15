@@ -57,3 +57,8 @@ A newsletter gerada inclui:
 - AI mock (opcional trocar para OpenAI)
 - Email mock (se `SEND_MODE=mock` ou `PREVIEW_MODE=true`)
 - Charts com dados mock
+
+
+## Webhook de status (Resend)
+Configure o webhook do Resend para apontar para `POST /api/email/resend/webhook`.
+Assim os DeliveryLogs são atualizados com `delivered`, `bounced`, `rejected`, `sent` ou `queued`.

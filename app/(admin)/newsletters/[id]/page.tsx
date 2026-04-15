@@ -23,6 +23,8 @@ export default async function NewsletterDetails({ params }: { params: { id: stri
         logs={newsletter.deliveryLogs.map((log) => ({
           id: log.id,
           status: log.status,
+          provider: log.provider,
+          providerMessageId: log.providerMessageId,
           errorMessage: log.errorMessage,
           createdAt: log.createdAt
         }))}

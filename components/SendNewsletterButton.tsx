@@ -20,7 +20,10 @@ export function SendNewsletterButton({ newsletterId }: { newsletterId: string })
 
       const summary = data.summary;
       const label = summary.mode === "live" ? "Envio real" : "Simulação";
-      setMessage(`${label}: ${summary.sent} enviados, ${summary.failed} falhas. Provider: ${summary.provider}.`);
+      const breakdown = summary.deliveryStatus
+        ? `queued=${summary.deliveryStatus.queued || 0}, delivered=${summary.deliveryStatus.delivered || 0}, bounced=${summary.deliveryStatus.bounced || 0}, rejected=${summary.deliveryStatus.rejected || 0}`
+        : "";
+      setMessage(`${label}: ${summary.sent} confirmados, ${summary.failed} falhas. Provider: ${summary.provider}. ${breakdown}`);
       setTimeout(() => window.location.reload(), 1000);
     } catch {
       setMessage("Erro inesperado no envio");

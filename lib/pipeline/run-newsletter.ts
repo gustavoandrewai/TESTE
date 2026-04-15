@@ -104,7 +104,6 @@ export async function sendNewsletter(newsletterId: string) {
 
   const emailConfig = await getEmailRuntimeConfig();
 
-  // 1) Preview sempre bloqueia envio real/simulado
   if (emailConfig.previewMode) {
     await Promise.all(
       recipients.map((recipient) =>
@@ -122,11 +121,9 @@ export async function sendNewsletter(newsletterId: string) {
     throw new Error("Envio bloqueado: PREVIEW_MODE=true");
   }
 
-  // 2) Modo mock explícito OU provider mock explícito
   const shouldMockSend = emailConfig.sendMode === "mock" || emailConfig.provider === "mock";
   const provider = shouldMockSend ? new MockEmailProvider() : selectProviderByName(emailConfig.provider);
 
-  // 3) Caminho live exige configuração válida (sem fallback silencioso)
   if (!shouldMockSend && !emailConfig.validForLive) {
     const reason = emailConfig.reasons.join("; ") || "Configuração de envio live inválida";
 
@@ -150,6 +147,7 @@ export async function sendNewsletter(newsletterId: string) {
   let sent = 0;
   let failed = 0;
   const failures: Array<{ recipient: string; reason: string }> = [];
+  const statusCount: Record<string, number> = { queued: 0, sent: 0, delivered: 0, bounced: 0, rejected: 0, mock_sent: 0, failed: 0 };
 
   for (const recipient of recipients) {
     try {
@@ -160,20 +158,30 @@ export async function sendNewsletter(newsletterId: string) {
         text: newsletter.textContent
       });
 
-      sent += 1;
+      const status = result.providerStatus;
+      statusCount[status] = (statusCount[status] || 0) + 1;
+
+      // só contamos como "sent" quando provider confirma sent/delivered/mock_sent
+      if (["sent", "delivered", "mock_sent"].includes(status)) {
+        sent += 1;
+      }
+
       await prisma.deliveryLog.create({
         data: {
           newsletterId,
           recipientId: recipient.id,
           provider: provider.name,
-          status: shouldMockSend ? "mock_sent" : "sent",
+          status,
           providerMessageId: result.messageId,
-          sentAt: new Date(),
-          errorMessage: shouldMockSend ? "Simulação de envio (modo/provider mock explícito)" : null
+          sentAt: ["sent", "delivered", "mock_sent", "queued"].includes(status) ? new Date() : null,
+          errorMessage: result.providerRaw || (status === "mock_sent" ? "Simulação de envio (modo/provider mock explícito)" : null)
         }
       });
+
+      console.log("delivery", { recipient: recipient.email, provider: provider.name, status, messageId: result.messageId });
     } catch (error) {
       failed += 1;
+      statusCount.failed = (statusCount.failed || 0) + 1;
       const reason = error instanceof Error ? error.message : "Erro desconhecido";
       failures.push({ recipient: recipient.email, reason });
 
@@ -186,10 +194,21 @@ export async function sendNewsletter(newsletterId: string) {
           errorMessage: reason
         }
       });
+
+      console.error("delivery_failed", { recipient: recipient.email, provider: provider.name, reason });
     }
   }
 
-  await prisma.newsletter.update({ where: { id: newsletterId }, data: { status: failed ? "FAILED" : "SENT", sentAt: new Date() } });
+  const providerConfirmed = statusCount.sent + statusCount.delivered;
+  const hasQueueOnly = statusCount.queued > 0 && providerConfirmed === 0;
+
+  await prisma.newsletter.update({
+    where: { id: newsletterId },
+    data: {
+      status: failed > 0 ? "FAILED" : providerConfirmed > 0 || statusCount.mock_sent > 0 ? "SENT" : hasQueueOnly ? "SCHEDULED" : "GENERATED",
+      sentAt: providerConfirmed > 0 || statusCount.mock_sent > 0 ? new Date() : null
+    }
+  });
 
   return {
     provider: provider.name,
@@ -197,6 +216,7 @@ export async function sendNewsletter(newsletterId: string) {
     previewMode: emailConfig.previewMode,
     sent,
     failed,
-    failures
+    failures,
+    deliveryStatus: statusCount
   };
 }
