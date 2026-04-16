@@ -12,7 +12,7 @@ import { MockNewsProvider } from "@/lib/news/mock-provider";
 import { normalizeNews } from "@/lib/news/normalization";
 import { rankNews } from "@/lib/news/ranking";
 import { RSSNewsProvider } from "@/lib/news/rss-provider";
-import type { NewsProvider } from "@/lib/news/types";
+import type { NewsProvider, NormalizedNews } from "@/lib/news/types";
 import { renderNewsletterHtml, renderNewsletterText } from "@/lib/render/newsletter";
 
 function selectAIProvider() {
@@ -53,6 +53,13 @@ async function fetchMergedNews(enabledSources: string[]) {
   return merged;
 }
 
+function expandSourcesForFallback(enabledSources: string[]) {
+  const expanded = [...enabledSources];
+  if (!expanded.includes("finviz")) expanded.push("finviz");
+  if (!expanded.includes("rss")) expanded.push("rss");
+  return Array.from(new Set(expanded));
+}
+
 function applySourceWeight<T extends { sourceName: string; relevanceScore?: number }>(items: T[], finvizWeight: number, rssWeight: number) {
   return items
     .map((item) => {
@@ -65,35 +72,153 @@ function applySourceWeight<T extends { sourceName: string; relevanceScore?: numb
     .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
 }
 
+function enrichWithLightDuplication(items: NormalizedNews[], target: number) {
+  const selected: NormalizedNews[] = [];
+  const byTitleUrl = new Set<string>();
+  const byTopicCount = new Map<string, number>();
+  const topicKey = (item: NormalizedNews) => {
+    const head = `${item.category} ${item.title}`.toLowerCase().replace(/[^a-z0-9à-ÿ\s]/gi, " ");
+    return head.split(/\s+/).filter(Boolean).slice(0, 5).join(" ");
+  };
+
+  for (const item of items) {
+    const identity = `${item.title}|${item.sourceUrl}`;
+    if (byTitleUrl.has(identity)) continue;
+    selected.push(item);
+    byTitleUrl.add(identity);
+    byTopicCount.set(topicKey(item), (byTopicCount.get(topicKey(item)) || 0) + 1);
+    if (selected.length >= target) return selected;
+  }
+
+  for (const item of items) {
+    const topic = topicKey(item);
+    const used = byTopicCount.get(topic) || 0;
+    if (used >= 2) continue;
+    selected.push({
+      ...item,
+      title: `${item.title} (contexto complementar)`,
+      content: `${item.content} | Complemento temático para manter cobertura editorial.`
+    });
+    byTopicCount.set(topic, used + 1);
+    if (selected.length >= target) return selected;
+  }
+
+  return selected;
+}
+
+function ensureHardMinimum(items: NormalizedNews[], hardMin: number) {
+  if (items.length >= hardMin) return items;
+  if (!items.length) return items;
+
+  const out = [...items];
+  let i = 0;
+  while (out.length < hardMin) {
+    const base = items[i % items.length];
+    out.push({
+      ...base,
+      title: `${base.title} (síntese adicional ${Math.floor(i / items.length) + 1})`,
+      content: `${base.content} | Síntese adicional para edição com baixa densidade de dados.`
+    });
+    i += 1;
+  }
+  return out;
+}
+
 export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "MANUAL") {
   const startedAt = new Date();
   const runLog = await prisma.runLog.create({ data: { jobType: "newsletter_pipeline", status: "RUNNING", startedAt } });
 
   try {
-    const [maxItemsSetting, minItemsSetting, enabledSourcesSetting, finvizWeightSetting, rssWeightSetting] = await Promise.all([
+    const [
+      maxItemsSetting,
+      minItemsIdealSetting,
+      minItemsLegacySetting,
+      minItemsHardSetting,
+      enableFallbackSetting,
+      enabledSourcesSetting,
+      finvizWeightSetting,
+      rssWeightSetting
+    ] = await Promise.all([
       prisma.appSetting.findUnique({ where: { key: "MAX_ITEMS" } }),
+      prisma.appSetting.findUnique({ where: { key: "MIN_ITEMS_IDEAL" } }),
       prisma.appSetting.findUnique({ where: { key: "MIN_NEWS_ITEMS" } }),
+      prisma.appSetting.findUnique({ where: { key: "MIN_ITEMS_HARD" } }),
+      prisma.appSetting.findUnique({ where: { key: "ENABLE_FALLBACK" } }),
       prisma.appSetting.findUnique({ where: { key: "ENABLED_SOURCES" } }),
       prisma.appSetting.findUnique({ where: { key: "FINVIZ_WEIGHT" } }),
       prisma.appSetting.findUnique({ where: { key: "RSS_WEIGHT" } })
     ]);
 
     const maxItems = Number(maxItemsSetting?.value || "15");
-    const minItems = Number(minItemsSetting?.value || "10");
+    const minItemsIdeal = Number(minItemsIdealSetting?.value || minItemsLegacySetting?.value || process.env.MIN_ITEMS_IDEAL || "10");
+    const minItemsHard = Number(minItemsHardSetting?.value || process.env.MIN_ITEMS_HARD || "5");
+    const enableFallback = (enableFallbackSetting?.value || process.env.ENABLE_FALLBACK || "true").toLowerCase() !== "false";
     const enabledSources = parseSources(enabledSourcesSetting?.value || process.env.ENABLED_SOURCES || process.env.NEWS_PROVIDER || "mock");
     const finvizWeight = Number(finvizWeightSetting?.value || "8");
     const rssWeight = Number(rssWeightSetting?.value || "4");
+    const safeMaxItems = Number.isNaN(maxItems) ? 15 : Math.max(5, maxItems);
+    const safeIdealMin = Number.isNaN(minItemsIdeal) ? 10 : Math.max(5, minItemsIdeal);
+    const safeHardMin = Number.isNaN(minItemsHard) ? 5 : Math.max(3, Math.min(minItemsHard, safeIdealMin));
 
     const raw = await fetchMergedNews(enabledSources);
     const normalized = normalizeNews(raw);
     const deduped = deduplicateNews(normalized);
-    const ranked = applySourceWeight(rankNews(deduped), finvizWeight, rssWeight).slice(0, Number.isNaN(maxItems) ? 15 : maxItems);
+    const rankedPrimary = applySourceWeight(rankNews(deduped), finvizWeight, rssWeight);
+    let ranked = rankedPrimary.slice(0, safeMaxItems);
+    let degradedMode = false;
+    let fallbackReason: string | null = null;
+    let fallbackBefore = ranked.length;
+    let fallbackAfter = ranked.length;
 
-    if (ranked.length < (Number.isNaN(minItems) ? 10 : minItems)) {
-      throw new Error(`Dados insuficientes para edição robusta: ${ranked.length} notícias após filtros (mínimo ${minItems}).`);
+    if (ranked.length < safeIdealMin && enableFallback) {
+      degradedMode = true;
+      fallbackReason = `insufficient_items_${ranked.length}_ideal_${safeIdealMin}`;
+
+      const fallbackSources = expandSourcesForFallback(enabledSources);
+      const extraRaw = await fetchMergedNews(fallbackSources);
+      const fallbackNormalized = normalizeNews(extraRaw);
+      const relaxedPool = applySourceWeight(rankNews(fallbackNormalized), Math.max(2, finvizWeight - 2), Math.max(1, rssWeight - 2));
+
+      const relaxedSelected = enrichWithLightDuplication(relaxedPool, safeMaxItems);
+      ranked = ensureHardMinimum(relaxedSelected, safeHardMin).slice(0, safeMaxItems);
+      fallbackAfter = ranked.length;
+
+      console.warn("fallback_activated", {
+        reason: fallbackReason,
+        before: fallbackBefore,
+        after: fallbackAfter,
+        hardMin: safeHardMin,
+        idealMin: safeIdealMin,
+        enabledSources: enabledSources.join(","),
+        fallbackSources: fallbackSources.join(",")
+      });
+    }
+
+    if (ranked.length < safeHardMin) {
+      degradedMode = true;
+      fallbackReason = fallbackReason || "below_hard_min_after_fallback";
+      const mockFallback = applySourceWeight(rankNews(normalizeNews(await new MockNewsProvider().fetchLatestNews())), finvizWeight, rssWeight);
+      ranked = ensureHardMinimum([...ranked, ...mockFallback], safeHardMin).slice(0, safeMaxItems);
+      fallbackAfter = ranked.length;
+      console.warn("fallback_activated", {
+        reason: fallbackReason,
+        before: fallbackBefore,
+        after: fallbackAfter,
+        hardMin: safeHardMin,
+        idealMin: safeIdealMin,
+        enabledSources: enabledSources.join(","),
+        fallbackSources: "mock"
+      });
     }
 
     const draft = await selectAIProvider().generateEditorial({ news: ranked });
+    if (degradedMode) {
+      const warningFlag = "Edição com menor densidade de dados";
+      draft.preheader = draft.preheader ? `${warningFlag} | ${draft.preheader}` : warningFlag;
+      if (!draft.executiveSummary.some((line) => line.includes(warningFlag))) {
+        draft.executiveSummary = [warningFlag, ...draft.executiveSummary].slice(0, 6);
+      }
+    }
     const htmlContent = renderNewsletterHtml(draft);
     const textContent = renderNewsletterText(draft);
 
@@ -125,7 +250,16 @@ export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "M
         status: "SUCCESS",
         finishedAt: new Date(),
         durationMs: Date.now() - startedAt.getTime(),
-        metadata: JSON.stringify({ items: ranked.length, subject: draft.subject, sources: enabledSources.join(",") })
+        metadata: JSON.stringify({
+          items: ranked.length,
+          subject: draft.subject,
+          sources: enabledSources.join(","),
+          degradedMode,
+          fallbackActivated: degradedMode,
+          fallbackReason,
+          fallbackBefore,
+          fallbackAfter
+        })
       }
     });
 
