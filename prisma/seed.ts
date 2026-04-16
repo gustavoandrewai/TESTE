@@ -22,6 +22,10 @@ async function main() {
     EMAIL_PROVIDER: process.env.EMAIL_PROVIDER || "mock",
     EMAIL_PROVIDER_STATUS: "pending",
     MAX_ITEMS: "15",
+    MIN_NEWS_ITEMS: "10",
+    ENABLED_SOURCES: process.env.ENABLED_SOURCES || process.env.NEWS_PROVIDER || "rss,finviz",
+    FINVIZ_WEIGHT: "8",
+    RSS_WEIGHT: "4",
     ENABLE_CHARTS: "true",
     ENABLE_IMAGES: "true",
     ENABLE_MARKET_SNAPSHOT: "true"

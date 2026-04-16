@@ -3,8 +3,11 @@ import { prisma } from "@/lib/db/prisma";
 import { getEmailRuntimeConfig } from "@/lib/email/mode";
 
 const defaultSettings = [
-  ["ENABLED_SOURCES", "mock,rss"],
+  ["ENABLED_SOURCES", "rss,finviz"],
   ["MAX_ITEMS", "15"],
+  ["MIN_NEWS_ITEMS", "10"],
+  ["FINVIZ_WEIGHT", "8"],
+  ["RSS_WEIGHT", "4"],
   ["PREVIEW_MODE", "true"],
   ["SEND_MODE", "mock"],
   ["SEND_TIME", "08:00"],

@@ -7,17 +7,13 @@ import { ResendProvider } from "@/lib/email/resend-provider";
 import { SendGridProvider } from "@/lib/email/sendgrid-provider";
 import type { EmailProvider } from "@/lib/email/types";
 import { deduplicateNews } from "@/lib/news/deduplication";
+import { FinvizNewsProvider } from "@/lib/news/finviz-provider";
 import { MockNewsProvider } from "@/lib/news/mock-provider";
 import { normalizeNews } from "@/lib/news/normalization";
 import { rankNews } from "@/lib/news/ranking";
 import { RSSNewsProvider } from "@/lib/news/rss-provider";
+import type { NewsProvider } from "@/lib/news/types";
 import { renderNewsletterHtml, renderNewsletterText } from "@/lib/render/newsletter";
-
-function selectNewsProvider() {
-  return process.env.NEWS_PROVIDER === "rss"
-    ? new RSSNewsProvider((process.env.NEWS_FEEDS || "").split(",").filter(Boolean))
-    : new MockNewsProvider();
-}
 
 function selectAIProvider() {
   return process.env.AI_PROVIDER === "openai" ? new OpenAIProvider() : new MockAIProvider();
@@ -29,20 +25,73 @@ function selectProviderByName(name: "mock" | "resend" | "sendgrid"): EmailProvid
   return new MockEmailProvider();
 }
 
+function parseSources(raw: string | undefined) {
+  return (raw || "mock")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function buildNewsProviders(enabledSources: string[]): NewsProvider[] {
+  const providers: NewsProvider[] = [];
+  if (enabledSources.includes("mock")) providers.push(new MockNewsProvider());
+  if (enabledSources.includes("rss")) providers.push(new RSSNewsProvider((process.env.NEWS_FEEDS || "").split(",").filter(Boolean)));
+  if (enabledSources.includes("finviz")) providers.push(new FinvizNewsProvider());
+  if (!providers.length) providers.push(new MockNewsProvider());
+  return providers;
+}
+
+async function fetchMergedNews(enabledSources: string[]) {
+  const providers = buildNewsProviders(enabledSources);
+  const settled = await Promise.allSettled(providers.map((provider) => provider.fetchLatestNews()));
+  const merged = settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+
+  for (const result of settled) {
+    if (result.status === "rejected") console.error("news_source_error", result.reason);
+  }
+
+  return merged;
+}
+
+function applySourceWeight<T extends { sourceName: string; relevanceScore?: number }>(items: T[], finvizWeight: number, rssWeight: number) {
+  return items
+    .map((item) => {
+      const source = (item.sourceName || "").toLowerCase();
+      let bonus = 0;
+      if (source.includes("finviz")) bonus = finvizWeight;
+      if (source.includes("reuters") || source.includes("bloomberg") || source.includes("cnbc")) bonus = rssWeight;
+      return { ...item, relevanceScore: Math.min(100, (item.relevanceScore || 0) + bonus) };
+    })
+    .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+}
+
 export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "MANUAL") {
   const startedAt = new Date();
   const runLog = await prisma.runLog.create({ data: { jobType: "newsletter_pipeline", status: "RUNNING", startedAt } });
 
   try {
-    const maxItemsSetting = await prisma.appSetting.findUnique({ where: { key: "MAX_ITEMS" } });
-    const maxItems = Number(maxItemsSetting?.value || "15");
+    const [maxItemsSetting, minItemsSetting, enabledSourcesSetting, finvizWeightSetting, rssWeightSetting] = await Promise.all([
+      prisma.appSetting.findUnique({ where: { key: "MAX_ITEMS" } }),
+      prisma.appSetting.findUnique({ where: { key: "MIN_NEWS_ITEMS" } }),
+      prisma.appSetting.findUnique({ where: { key: "ENABLED_SOURCES" } }),
+      prisma.appSetting.findUnique({ where: { key: "FINVIZ_WEIGHT" } }),
+      prisma.appSetting.findUnique({ where: { key: "RSS_WEIGHT" } })
+    ]);
 
-    const raw = await selectNewsProvider().fetchLatestNews();
+    const maxItems = Number(maxItemsSetting?.value || "15");
+    const minItems = Number(minItemsSetting?.value || "10");
+    const enabledSources = parseSources(enabledSourcesSetting?.value || process.env.ENABLED_SOURCES || process.env.NEWS_PROVIDER || "mock");
+    const finvizWeight = Number(finvizWeightSetting?.value || "8");
+    const rssWeight = Number(rssWeightSetting?.value || "4");
+
+    const raw = await fetchMergedNews(enabledSources);
     const normalized = normalizeNews(raw);
     const deduped = deduplicateNews(normalized);
-    const ranked = rankNews(deduped).slice(0, Number.isNaN(maxItems) ? 15 : maxItems);
+    const ranked = applySourceWeight(rankNews(deduped), finvizWeight, rssWeight).slice(0, Number.isNaN(maxItems) ? 15 : maxItems);
 
-    if (!ranked.length) throw new Error("Nenhuma notícia relevante encontrada.");
+    if (ranked.length < (Number.isNaN(minItems) ? 10 : minItems)) {
+      throw new Error(`Dados insuficientes para edição robusta: ${ranked.length} notícias após filtros (mínimo ${minItems}).`);
+    }
 
     const draft = await selectAIProvider().generateEditorial({ news: ranked });
     const htmlContent = renderNewsletterHtml(draft);
@@ -76,7 +125,7 @@ export async function runNewsletterPipeline(runType: "MANUAL" | "SCHEDULED" = "M
         status: "SUCCESS",
         finishedAt: new Date(),
         durationMs: Date.now() - startedAt.getTime(),
-        metadata: JSON.stringify({ items: ranked.length, subject: draft.subject })
+        metadata: JSON.stringify({ items: ranked.length, subject: draft.subject, sources: enabledSources.join(",") })
       }
     });
 
@@ -161,7 +210,6 @@ export async function sendNewsletter(newsletterId: string) {
       const status = result.providerStatus;
       statusCount[status] = (statusCount[status] || 0) + 1;
 
-      // só contamos como "sent" quando provider confirma sent/delivered/mock_sent
       if (["sent", "delivered", "mock_sent"].includes(status)) {
         sent += 1;
       }

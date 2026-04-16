@@ -26,6 +26,7 @@ if not exist "%ENV_FILE%" (
   >>"%ENV_FILE%" echo OPENAI_MODEL="gpt-4.1-mini"
   >>"%ENV_FILE%" echo AI_PROVIDER="mock"
   >>"%ENV_FILE%" echo NEWS_PROVIDER="mock"
+  >>"%ENV_FILE%" echo ENABLED_SOURCES="rss,finviz"
   >>"%ENV_FILE%" echo NEWS_FEEDS=""
   >>"%ENV_FILE%" echo EMAIL_PROVIDER="mock"
   >>"%ENV_FILE%" echo SEND_MODE="mock"
