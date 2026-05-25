@@ -7,7 +7,20 @@ echo =========================================
 echo  Calculadora Future Value - Inicializacao
 echo =========================================
 
-:after_install
+set "APP_DIR="
+if exist "package.json" (
+  set "APP_DIR=%CD%"
+) else if exist "FV\package.json" (
+  set "APP_DIR=%CD%\FV"
+) else (
+  echo Nao encontrei package.json nesta pasta.
+  echo Coloque este .bat na pasta do projeto ou em uma pasta pai contendo \FV\package.json.
+  goto :error
+)
+
+cd /d "%APP_DIR%"
+echo Projeto encontrado em: %APP_DIR%
+
 if not exist "node_modules" (
   echo [1/3] Instalando dependencias (npm install)...
   call npm install
